@@ -1,0 +1,2659 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Field-Photo Inspector · Plaatsbeschrijving</title>
+
+  <!--
+    ============================================================
+    Smart Field-Photo Inspector
+    Peritaje técnico fotográfico georreferenciado
+    (plaatsbeschrijving aanvang der werken – Bélgica)
+
+    Stack (CDN, sin bundlers):
+      - Leaflet 1.9.4        → mapa interactivo
+      - exifr 7              → lectura EXIF / GPS
+      - proj4js 2            → WGS84 → Belgische Lambert 72 (EPSG:31370)
+      - jsPDF 2 + AutoTable  → informe PDF
+    Funciona abriendo el archivo directamente (file:///).
+    ============================================================
+  -->
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+
+  <style>
+    /* ==========================================================
+       Design tokens
+       ========================================================== */
+    :root {
+      --c-bg: #f1f5f9;
+      --c-surface: #ffffff;
+      --c-surface-2: #f8fafc;
+      --c-border: #e2e8f0;
+      --c-border-strong: #cbd5e1;
+      --c-text: #0f172a;
+      --c-text-2: #475569;
+      --c-text-3: #94a3b8;
+      --c-header: #0f172a;
+      --c-accent: #2563eb;
+      --c-accent-hover: #1d4ed8;
+      --c-accent-soft: #eff6ff;
+      --c-ok: #059669;
+      --c-ok-soft: #ecfdf5;
+      --c-warn: #d97706;
+      --c-warn-soft: #fffbeb;
+      --c-danger: #dc2626;
+      --c-danger-soft: #fef2f2;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, .06);
+      --shadow-md: 0 4px 14px rgba(15, 23, 42, .10);
+      --sidebar-w: 410px;
+      --header-h: 60px;
+      --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--c-text);
+      background: var(--c-bg);
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea, select { font: inherit; color: inherit; }
+
+    /* ==========================================================
+       Header
+       ========================================================== */
+    .app-header {
+      height: var(--header-h);
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 20px;
+      background: var(--c-header);
+      color: #fff;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
+      z-index: 1000;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-logo {
+      width: 34px; height: 34px; flex: 0 0 auto;
+      display: grid; place-items: center;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2563eb, #0ea5e9);
+      font-size: 18px;
+    }
+    .brand-text { min-width: 0; }
+    .brand-title { font-size: 15px; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
+    .brand-sub { font-size: 11.5px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .header-stats { display: flex; gap: 8px; margin-left: auto; }
+    .stat {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .08);
+      font-size: 12px; color: #cbd5e1; white-space: nowrap;
+    }
+    .stat b { color: #fff; font-variant-numeric: tabular-nums; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-gps { background: #10b981; }
+    .dot-manual { background: #f59e0b; }
+    .dot-none { background: #f87171; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 8px 14px;
+      font-weight: 600; font-size: 13px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, box-shadow .15s, opacity .15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: var(--c-accent); color: #fff; box-shadow: 0 2px 8px rgba(37, 99, 235, .35); }
+    .btn-primary:not(:disabled):hover { background: var(--c-accent-hover); }
+    .btn-export { padding: 10px 18px; font-size: 13.5px; }
+    .btn-ghost { background: transparent; border-color: var(--c-border-strong); color: var(--c-text-2); }
+    .btn-ghost:not(:disabled):hover { background: var(--c-surface-2); color: var(--c-text); }
+    .btn-locate {
+      width: 100%;
+      background: var(--c-warn-soft); color: #92400e;
+      border: 1px dashed #f59e0b;
+    }
+    .btn-locate:hover { background: #fef3c7; }
+    .btn-cancel { width: 100%; background: var(--c-danger-soft); color: var(--c-danger); border: 1px solid #fecaca; }
+    .btn-demo {
+      width: 100%;
+      background: var(--c-surface-2);
+      border: 1px dashed var(--c-border-strong);
+      color: var(--c-text-2);
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+    }
+    .btn-demo:hover {
+      background: var(--c-accent-soft);
+      border-color: var(--c-accent);
+      color: var(--c-accent);
+      box-shadow: 0 1px 4px rgba(37, 99, 235, 0.12);
+    }
+    .field-test {
+      padding: 10px 12px;
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
+      background: var(--c-surface-2);
+      color: var(--c-text-2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .field-test summary { color: var(--c-text); font-weight: 700; cursor: pointer; }
+    .field-test ol { margin: 8px 0 0; padding-left: 20px; }
+    .field-test li + li { margin-top: 8px; }
+    .field-test a { color: var(--c-accent); }
+    .field-test-note { margin: 8px 0 0; color: var(--c-text-3); font-size: 11px; }
+
+    /* ==========================================================
+       Layout
+       ========================================================== */
+    .app-main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+    .sidebar {
+      width: var(--sidebar-w);
+      flex: 0 0 auto;
+      display: flex; flex-direction: column;
+      background: var(--c-surface);
+      border-right: 1px solid var(--c-border);
+      min-height: 0;
+    }
+    .sidebar-scroll { flex: 1 1 auto; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+    .section-title {
+      font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--c-text-3);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    /* ---- Project details ---- */
+    details.panel {
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
+      background: var(--c-surface-2);
+    }
+    details.panel > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 10px 14px;
+      font-weight: 600; font-size: 13px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    details.panel > summary::-webkit-details-marker { display: none; }
+    details.panel > summary::after { content: "▾"; color: var(--c-text-3); transition: transform .2s; }
+    details.panel:not([open]) > summary::after { transform: rotate(-90deg); }
+    .panel-body { padding: 4px 14px 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { font-size: 11.5px; font-weight: 600; color: var(--c-text-2); }
+    .field input, .field select {
+      border: 1px solid var(--c-border-strong);
+      border-radius: var(--radius-sm);
+      padding: 7px 9px;
+      background: #fff;
+      font-size: 13px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .field input:focus, .field select:focus, .card textarea:focus {
+      border-color: var(--c-accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
+    }
+    .check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--c-text-2); cursor: pointer; }
+
+    /* ---- Drop zone ---- */
+    .dropzone {
+      border: 2px dashed var(--c-border-strong);
+      border-radius: var(--radius);
+      padding: 20px 16px;
+      text-align: center;
+      background: var(--c-surface-2);
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      outline: none;
+    }
+    .dropzone:hover, .dropzone:focus-visible { border-color: var(--c-accent); background: var(--c-accent-soft); }
+    .dropzone.is-over { border-color: var(--c-accent); background: var(--c-accent-soft); box-shadow: inset 0 0 0 3px rgba(37, 99, 235, .12); }
+    .dropzone-icon { font-size: 28px; line-height: 1; }
+    .dropzone-title { font-weight: 600; margin: 8px 0 2px; }
+    .dropzone-hint { font-size: 12px; color: var(--c-text-2); }
+    .dropzone input { display: none; }
+
+    /* ---- Progress ---- */
+    .progress { display: none; flex-direction: column; gap: 6px; font-size: 12px; color: var(--c-text-2); }
+    .progress.is-visible { display: flex; }
+    .progress-bar { height: 6px; border-radius: 99px; background: var(--c-border); overflow: hidden; }
+    .progress-bar > span { display: block; height: 100%; width: 0; background: var(--c-accent); transition: width .2s; }
+
+    /* ---- Photo list & cards ---- */
+    .photo-list { display: flex; flex-direction: column; gap: 10px; }
+    .empty {
+      text-align: center; color: var(--c-text-3);
+      padding: 26px 10px; font-size: 13px;
+      border: 1px solid var(--c-border); border-radius: var(--radius);
+    }
+    .card {
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
+      background: var(--c-surface);
+      padding: 10px;
+      display: flex; flex-direction: column; gap: 8px;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .card:hover { border-color: var(--c-border-strong); box-shadow: var(--shadow-md); }
+    .card.is-active { border-color: var(--c-accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .15); }
+    .card.is-placing { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, .2); }
+    .card-top { display: flex; gap: 10px; align-items: flex-start; }
+    .thumb-wrap { position: relative; flex: 0 0 auto; }
+    .thumb-wrap img {
+      width: 78px; height: 78px; object-fit: cover;
+      border-radius: var(--radius-sm);
+      display: block; background: var(--c-border);
+    }
+    .card-num {
+      position: absolute; top: -6px; left: -6px;
+      min-width: 22px; height: 22px; padding: 0 5px;
+      border-radius: 11px;
+      background: var(--c-header); color: #fff;
+      font-size: 11px; font-weight: 700;
+      display: grid; place-items: center;
+      border: 2px solid #fff;
+    }
+    .card-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+    .card-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta-row { font-size: 12px; color: var(--c-text-2); }
+    .meta-row.mono { font-family: var(--mono); font-size: 11.5px; }
+    .meta-row .muted { color: var(--c-text-3); }
+    .tag {
+      align-self: flex-start;
+      margin-top: 2px;
+      font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+      padding: 2px 7px; border-radius: 99px;
+    }
+    .tag-gps { background: var(--c-ok-soft); color: var(--c-ok); }
+    .tag-manual { background: var(--c-warn-soft); color: var(--c-warn); }
+    .tag-none { background: var(--c-danger-soft); color: var(--c-danger); }
+    .icon-btn {
+      flex: 0 0 auto;
+      width: 26px; height: 26px;
+      border: none; border-radius: var(--radius-sm);
+      background: transparent; color: var(--c-text-3);
+      cursor: pointer; font-size: 14px;
+    }
+    .icon-btn:hover { background: var(--c-danger-soft); color: var(--c-danger); }
+    .note-label { font-size: 11.5px; font-weight: 600; color: var(--c-text-2); }
+    .card textarea {
+      width: 100%; resize: vertical; min-height: 52px;
+      border: 1px solid var(--c-border-strong);
+      border-radius: var(--radius-sm);
+      padding: 7px 9px; font-size: 13px; line-height: 1.4;
+      outline: none; background: #fff;
+      cursor: text;
+    }
+    .card-actions { display: flex; justify-content: flex-end; }
+    .link-btn {
+      border: none; background: none; padding: 2px 0;
+      color: var(--c-accent); font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .link-btn:hover { text-decoration: underline; }
+
+    .sidebar-footer {
+      flex: 0 0 auto;
+      display: flex; gap: 8px; justify-content: space-between; align-items: center;
+      padding: 10px 16px;
+      border-top: 1px solid var(--c-border);
+      font-size: 11.5px; color: var(--c-text-3);
+    }
+
+    /* ==========================================================
+       Map
+       ========================================================== */
+    .map-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+    #map { position: absolute; inset: 0; background: #e5e7eb; }
+    #map.is-placing,
+    #map.is-placing *,
+    #map.is-placing .leaflet-container,
+    #map.is-placing .leaflet-interactive,
+    #map.is-placing .leaflet-grab,
+    #map.is-placing .leaflet-pane {
+      cursor: crosshair !important;
+    }
+
+    .placing-banner {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      z-index: 800;
+      display: none; align-items: center; gap: 12px;
+      max-width: calc(100% - 120px);
+      padding: 10px 14px;
+      background: var(--c-header); color: #fff;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-md);
+      font-size: 13px;
+    }
+    .placing-banner.is-visible { display: flex; }
+    .placing-banner b { color: #fbbf24; }
+    .placing-banner button {
+      border: 1px solid rgba(255, 255, 255, .3); background: transparent; color: #fff;
+      padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
+    }
+
+    /* Numbered markers */
+    .num-marker-wrap { background: none; border: none; }
+    .num-marker {
+      position: relative;
+      width: 30px; height: 30px; border-radius: 50%;
+      display: grid; place-items: center;
+      color: #fff; font-weight: 700; font-size: 12.5px;
+      border: 2px solid #fff;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+      transition: transform .15s;
+    }
+    .num-marker::after {
+      content: ""; position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%);
+      border-left: 6px solid transparent; border-right: 6px solid transparent;
+      border-top: 8px solid #fff;
+    }
+    .num-marker.gps { background: #0f172a; }
+    .num-marker.manual { background: #d97706; }
+    .num-marker.active { background: var(--c-accent); transform: scale(1.18); }
+
+    /* Popup */
+    .leaflet-popup-content-wrapper { border-radius: var(--radius); }
+    .leaflet-popup-content { margin: 10px; font-family: var(--font); }
+    .popup img { display: block; border-radius: var(--radius-sm); max-width: 100%; height: auto; background: var(--c-border); }
+    .popup-title { font-weight: 700; font-size: 13px; margin: 8px 0 4px; word-break: break-all; }
+    .popup dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
+    .popup dt { color: var(--c-text-3); }
+    .popup dd { margin: 0; color: var(--c-text); }
+    .popup .mono { font-family: var(--mono); font-size: 11.5px; }
+    .popup-note {
+      margin-top: 8px; padding: 7px 9px;
+      background: var(--c-warn-soft); border-left: 3px solid #f59e0b;
+      border-radius: 4px; font-size: 12.5px; white-space: pre-wrap;
+    }
+    .popup-note.empty-note { background: var(--c-surface-2); border-left-color: var(--c-border-strong); color: var(--c-text-3); font-style: italic; }
+
+    /* Custom fit control */
+    .leaflet-control-fit a { font-size: 16px; line-height: 30px; text-decoration: none; color: #333; }
+
+    /* ==========================================================
+       Toasts & overlays
+       ========================================================== */
+    .toasts {
+      position: fixed; right: 16px; bottom: 16px; z-index: 5000;
+      display: flex; flex-direction: column; gap: 8px;
+      max-width: min(420px, calc(100vw - 32px));
+    }
+    .toast {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 10px 14px;
+      background: #fff; border: 1px solid var(--c-border); border-left: 4px solid var(--c-accent);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-md);
+      font-size: 13px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast.success { border-left-color: var(--c-ok); }
+    .toast.warning { border-left-color: var(--c-warn); }
+    .toast.error { border-left-color: var(--c-danger); }
+    .toast.is-leaving { opacity: 0; transform: translateY(6px); transition: all .25s; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+    .drop-overlay {
+      position: fixed; inset: 0; z-index: 4000;
+      display: none; place-items: center;
+      background: rgba(15, 23, 42, .55);
+      color: #fff; font-size: 20px; font-weight: 700;
+      pointer-events: none;
+    }
+    .drop-overlay.is-visible { display: grid; }
+    .drop-overlay > div { padding: 30px 40px; border: 3px dashed rgba(255, 255, 255, .8); border-radius: 16px; }
+
+    .fatal {
+      display: none;
+      padding: 12px 20px;
+      background: var(--c-danger-soft); color: var(--c-danger);
+      border-bottom: 1px solid #fecaca;
+      font-size: 13px;
+    }
+    .fatal.is-visible { display: block; }
+
+    /* ==========================================================
+       Responsive
+       ========================================================== */
+    @media (max-width: 1100px) {
+      .header-stats .stat:not(.stat-total) { display: none; }
+    }
+    @media (max-width: 860px) {
+      body { height: auto; min-height: 100%; }
+      .app-header { position: sticky; top: 0; padding: 0 12px; gap: 10px; }
+      .brand-sub, .header-stats { display: none; }
+      .btn-export .label-long { display: none; }
+      .app-main { flex-direction: column-reverse; }
+      .sidebar { width: 100%; border-right: none; border-top: 1px solid var(--c-border); }
+      .sidebar-scroll { overflow: visible; }
+      .map-wrap { height: 58vh; flex: 0 0 auto; }
+      .placing-banner { max-width: calc(100% - 24px); flex-wrap: wrap; }
+    }
+    @media (min-width: 861px) {
+      .btn-export .label-short { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ================= HEADER ================= -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">📐</div>
+      <div class="brand-text">
+        <div class="brand-title">Smart Field-Photo Inspector</div>
+        <div class="brand-sub">Plaatsbeschrijving aanvang der werken · Peritaje fotográfico georreferenciado</div>
+      </div>
+    </div>
+
+    <div class="header-stats" aria-live="polite">
+      <span class="stat stat-total">Fotos <b id="statTotal">0</b></span>
+      <span class="stat"><i class="dot dot-gps"></i>GPS <b id="statGps">0</b></span>
+      <span class="stat"><i class="dot dot-manual"></i>Manual <b id="statManual">0</b></span>
+      <span class="stat"><i class="dot dot-none"></i>Sin ubicar <b id="statNone">0</b></span>
+    </div>
+
+    <button id="btnExport" class="btn btn-primary btn-export" disabled title="Generar informe técnico en PDF">
+      📄 <span class="label-long">Exportar Informe PDF</span><span class="label-short">PDF</span>
+    </button>
+  </header>
+
+  <div id="fatal" class="fatal" role="alert"></div>
+
+  <!-- ================= MAIN ================= -->
+  <main class="app-main">
+
+    <!-- ---------- Sidebar ---------- -->
+    <aside class="sidebar">
+      <div class="sidebar-scroll">
+
+        <details class="panel" open>
+          <summary>🗂️ Datos del expediente</summary>
+          <div class="panel-body">
+            <div class="field full">
+              <label for="fProject">Proyecto / Obra</label>
+              <input id="fProject" data-persist type="text" placeholder="Nieuwbouw meergezinswoning">
+            </div>
+            <div class="field full">
+              <label for="fAddress">Dirección / Locatie</label>
+              <input id="fAddress" data-persist type="text" placeholder="Kerkstraat 12, 9000 Gent">
+            </div>
+            <div class="field">
+              <label for="fExpert">Perito / Deskundige</label>
+              <input id="fExpert" data-persist type="text" placeholder="Ing. J. Peeters">
+            </div>
+            <div class="field">
+              <label for="fRef">Referencia / Dossier</label>
+              <input id="fRef" data-persist type="text" placeholder="PB-2026-041">
+            </div>
+            <div class="field">
+              <label for="fLang">Idioma del informe</label>
+              <select id="fLang" data-persist>
+                <option value="nl">Nederlands</option>
+                <option value="es">Español</option>
+              </select>
+            </div>
+            <div class="field" style="justify-content:flex-end">
+              <label class="check"><input id="fAnnex" type="checkbox" checked> Anexo fotográfico</label>
+            </div>
+          </div>
+        </details>
+
+        <div class="section-title">Fotografías</div>
+
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Seleccionar o arrastrar fotos JPG o HEIC">
+          <div class="dropzone-icon">📷</div>
+          <div class="dropzone-title">Arrastra fotos aquí o haz clic para seleccionar</div>
+          <div class="dropzone-hint">JPG / JPEG / HEIC · selección múltiple · lectura local de GPS, altitud y fecha EXIF</div>
+          <input id="fileInput" type="file" accept=".jpg,.jpeg,.heic,.heif,image/jpeg,image/heic,image/heif" multiple>
+        </div>
+
+        <button id="btnDemo" type="button" class="btn btn-demo" title="Carga 3 fotografías de muestra georreferenciadas en Bélgica">
+          🧪 Cargar 3 fotos de prueba (Demo Bélgica)
+        </button>
+
+        <div id="progress" class="progress" aria-live="polite">
+          <span id="progressText">Procesando…</span>
+          <div class="progress-bar"><span id="progressFill"></span></div>
+        </div>
+
+        <div id="photoList" class="photo-list"></div>
+        <details class="field-test">
+          <summary>✅ Cómo probarla de verdad (3 pasos)</summary>
+          <ol>
+            <li>Exporta el PDF y compáralo con la <a href="https://assets.antwerpen.be/srv/assets/api/download/f51557db-500f-4837-905b-ea5a44cd052d/Plaatsbeschrijving%20na%20werken.pdf" target="_blank" rel="noopener noreferrer">guía de Amberes</a>: comprueba la numeración, la descripción de cada foto y el plano con las posiciones.</li>
+            <li>Prueba 20–30 fotos reales del móvil: con y sin GPS, JPG y HEIC, giradas y de gran tamaño. Verifica los datos GPS y que las fotos sin ubicación se puedan colocar manualmente.</li>
+            <li>Genera otro PDF y revisa que no falten fotos, que números, descripciones y posiciones coincidan, y que las fotos giradas se vean derechas. Revisa también avisos y páginas antes de entregar.</li>
+          </ol>
+          <p class="field-test-note">La lista ayuda a validar el resultado; no sustituye la revisión profesional ni certifica por sí sola el cumplimiento legal.</p>
+        </details>
+      </div>
+
+      <div class="sidebar-footer">
+        <span>Datos procesados localmente · nada se sube a servidores</span>
+        <button id="btnClear" class="btn btn-ghost" disabled style="padding:5px 10px;font-size:12px">Vaciar</button>
+      </div>
+    </aside>
+
+    <!-- ---------- Map ---------- -->
+    <section class="map-wrap">
+      <div id="map" aria-label="Mapa de ubicaciones fotográficas"></div>
+      <div id="placingBanner" class="placing-banner" role="status">
+        <span id="placingText"></span>
+        <button id="btnCancelPlacing" type="button">Cancelar (Esc)</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
+  <div id="dropOverlay" class="drop-overlay"><div>📷 Suelta las fotos para añadirlas</div></div>
+
+  <!-- ================= LIBRARIES (CDN) ================= -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/proj4@2.11.0/dist/proj4.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- ================= APPLICATION ================= -->
+  <script>
+  (() => {
+    'use strict';
+
+    /* ==========================================================
+       1. CONFIGURATION
+       ========================================================== */
+    const CONFIG = {
+      initialCenter: [50.85, 4.35],         // Bélgica
+      initialZoom: 8,
+      focusZoom: 18,
+      thumbSize: 360,                       // px – tarjetas y tabla PDF
+      previewSize: 640,                     // px – popup del mapa
+      reportSize: 1600,                     // px – anexo fotográfico PDF
+      popupImgWidth: 280,                   // px
+      maxFileSizeMB: 60,
+      // Envolvente aproximada de Bélgica (para mostrar Lambert 72 solo cuando tiene sentido)
+      belgium: { minLat: 49.45, maxLat: 51.56, minLng: 2.50, maxLng: 6.45 },
+      storageKey: 'sfpi.project.v1'
+    };
+
+    /** Definición oficial EPSG:31370 – Belgian Lambert 72 (con parámetros Helmert hacia WGS84). */
+    const EPSG_31370 = '+proj=lcc +lat_0=90 +lon_0=4.36748666666667 +lat_1=51.1666672333333 ' +
+      '+lat_2=49.8333339 +x_0=150000.013 +y_0=5400088.438 +ellps=intl ' +
+      '+towgs84=-106.8686,52.2978,-103.7239,0.3366,-0.457,1.8422,-1.2747 +units=m +no_defs';
+
+    /** Textos del informe PDF (NL / ES). */
+    const I18N = {
+      nl: {
+        title: 'TECHNISCH VERSLAG',
+        subtitle: 'Plaatsbeschrijving aanvang der werken - fotografische vaststellingen',
+        generated: 'Opgemaakt op',
+        ref: 'Dossier',
+        project: 'Project / werf',
+        location: 'Locatie',
+        expert: 'Deskundige',
+        genDate: 'Datum verslag',
+        numPhotos: "Aantal foto's",
+        photosDetail: (n, g, m, x) => `${n} (${g} GPS-EXIF, ${m} handmatig gelokaliseerd, ${x} zonder locatie)`,
+        crs: 'Coördinatenstelsel',
+        crsValue: 'WGS84 (EPSG:4326) - Belgische Lambert 72 (EPSG:31370)',
+        sec1: '1. Overzicht van de vaststellingen',
+        sec2: '2. Ondertekening',
+        annex: 'Bijlage - Fotoreportage',
+        colNr: 'Nr.', colPhoto: 'Foto / Bestand', colFile: 'Bestand / opnamedatum',
+        colCoords: 'Coördinaten', colNote: 'Vaststelling / opmerking',
+        noNote: '- geen opmerking -',
+        defaultDamage: 'Geen zichtbare schade vastgesteld',
+        seeAnnex: (nr) => `[Foto ${nr} in bijlage]`,
+        positionPlan: 'Schematisch fotoplan',
+        positionPlanNote: 'Schematisch fotoplan zonder straten; schaal is indicatief.',
+        planLat: 'Breedtegraad',
+        planLon: 'Lengtegraad',
+        planGps: 'GPS EXIF',
+        planManual: 'Handmatige locatie',
+        planCount: (located, missing) => `${located} locaties op plan · ${missing} zonder locatie`,
+        planEmpty: 'Geen foto heeft een locatie. Plaats foto’s handmatig op de kaart en exporteer opnieuw.',
+        fileDateLabel: 'Bestandsdatum',
+        noLocation: 'Geen locatie beschikbaar',
+        srcGps: 'Bron: GPS (EXIF)', srcManual: 'Bron: handmatig geplaatst',
+        alt: 'Hoogte', acc: 'nauwk.',
+        fileDateNote: '* Geen EXIF-opnamedatum beschikbaar: wijzigingsdatum van het bestand gebruikt.',
+        manualNote: 'Handmatig geplaatste locaties zijn door de deskundige op de kaart aangeduid en hebben een beperkte nauwkeurigheid.',
+        signIntro: (d, e) => `Opgemaakt op ${d}${e ? ' door ' + e : ''}.`,
+        signExpert: 'Handtekening deskundige', signParty: 'Handtekening partijen',
+        page: 'Pagina', photo: 'Foto', na: 'n.v.t.', unnamed: 'Naamloos project'
+      },
+      es: {
+        title: 'INFORME TÉCNICO',
+        subtitle: 'Acta de estado previo al inicio de obras - constataciones fotográficas',
+        generated: 'Generado el',
+        ref: 'Expediente',
+        project: 'Proyecto / obra',
+        location: 'Ubicación',
+        expert: 'Perito',
+        genDate: 'Fecha del informe',
+        numPhotos: 'Número de fotos',
+        photosDetail: (n, g, m, x) => `${n} (${g} GPS-EXIF, ${m} ubicadas manualmente, ${x} sin ubicación)`,
+        crs: 'Sistema de coordenadas',
+        crsValue: 'WGS84 (EPSG:4326) - Lambert belga 72 (EPSG:31370)',
+        sec1: '1. Resumen de constataciones',
+        sec2: '2. Firmas',
+        annex: 'Anexo - Reportaje fotográfico',
+        colNr: 'N.º', colPhoto: 'Foto / Archivo', colFile: 'Archivo / fecha de captura',
+        colCoords: 'Coordenadas', colNote: 'Anotación / daño observado',
+        noNote: '- sin anotación -',
+        defaultDamage: 'Sin daños visibles observados',
+        seeAnnex: (nr) => `[Foto ${nr} en el anexo]`,
+        positionPlan: 'Plano esquemático de posiciones',
+        positionPlanNote: 'Plano esquemático sin calles; la escala es orientativa.',
+        planLat: 'Latitud',
+        planLon: 'Longitud',
+        planGps: 'GPS EXIF',
+        planManual: 'Ubicación manual',
+        planCount: (located, missing) => `${located} posiciones en el plano · ${missing} sin ubicación`,
+        planEmpty: 'Ninguna foto tiene ubicación. Coloca las fotos manualmente en el mapa y vuelve a exportar.',
+        fileDateLabel: 'Fecha del archivo',
+        noLocation: 'Sin ubicación disponible',
+        srcGps: 'Fuente: GPS (EXIF)', srcManual: 'Fuente: ubicada manualmente',
+        alt: 'Altitud', acc: 'prec.',
+        fileDateNote: '* Sin fecha EXIF de captura: se ha usado la fecha de modificación del archivo.',
+        manualNote: 'Las ubicaciones manuales han sido marcadas por el perito sobre el mapa y tienen una precisión limitada.',
+        signIntro: (d, e) => `Redactado el ${d}${e ? ' por ' + e : ''}.`,
+        signExpert: 'Firma del perito', signParty: 'Firma de las partes',
+        page: 'Página', photo: 'Foto', na: 'n/d', unnamed: 'Proyecto sin nombre'
+      }
+    };
+
+    /* ==========================================================
+       2. STATE & DOM
+       ========================================================== */
+    /**
+     * @typedef {Object} Photo
+     * @property {string} id
+     * @property {string} name
+     * @property {number} size
+     * @property {number} lastModified
+     * @property {{url:string,w:number,h:number}} thumb
+     * @property {{url:string,w:number,h:number}} preview
+     * @property {{url:string,w:number,h:number}} report
+     * @property {Date}   date
+     * @property {'exif'|'file'} dateSource
+     * @property {{lat:number,lng:number}|null} coords
+     * @property {number|null} alt
+     * @property {number|null} accuracy
+     * @property {'gps'|'manual'|null} source
+     * @property {string} camera
+     * @property {string} note
+     */
+    const state = {
+      /** @type {Photo[]} */ photos: [],
+      placingId: null,
+      activeId: null,
+      busy: false,
+      /** @type {Map<string, L.Marker>} */ markers: new Map(),
+      noteTimers: new Map()
+    };
+
+    const $ = (sel) => document.querySelector(sel);
+    const dom = {
+      fatal: $('#fatal'),
+      map: $('#map'),
+      dropzone: $('#dropzone'),
+      fileInput: $('#fileInput'),
+      list: $('#photoList'),
+      progress: $('#progress'),
+      progressText: $('#progressText'),
+      progressFill: $('#progressFill'),
+      btnExport: $('#btnExport'),
+      btnDemo: $('#btnDemo'),
+      btnClear: $('#btnClear'),
+      banner: $('#placingBanner'),
+      bannerText: $('#placingText'),
+      btnCancelPlacing: $('#btnCancelPlacing'),
+      toasts: $('#toasts'),
+      dropOverlay: $('#dropOverlay'),
+      stats: { total: $('#statTotal'), gps: $('#statGps'), manual: $('#statManual'), none: $('#statNone') },
+      fields: {
+        project: $('#fProject'), address: $('#fAddress'), expert: $('#fExpert'),
+        ref: $('#fRef'), lang: $('#fLang'), annex: $('#fAnnex')
+      }
+    };
+
+    /* ==========================================================
+       3. UTILITIES
+       ========================================================== */
+    /** Escapa texto para insertarlo de forma segura en HTML. */
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    const pad = (n) => String(n).padStart(2, '0');
+
+    /** dd/mm/yyyy hh:mm:ss (formato belga, independiente del locale). */
+    const fmtDateTime = (d, withSeconds = true) => {
+      if (!(d instanceof Date) || isNaN(d)) return '—';
+      const t = `${pad(d.getHours())}:${pad(d.getMinutes())}${withSeconds ? ':' + pad(d.getSeconds()) : ''}`;
+      return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${t}`;
+    };
+    const fmtDate = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+    const fmtCoord = (v) => v.toFixed(6);
+    const fmtMeters = (v) => v.toLocaleString('nl-BE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `p${Date.now()}${Math.random().toString(16).slice(2)}`);
+
+    const slugify = (s) => String(s || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50);
+
+    const getPhoto = (id) => state.photos.find((p) => p.id === id);
+    const photoIndex = (id) => state.photos.findIndex((p) => p.id === id);
+
+    const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
+
+    /** Convierte WGS84 a Lambert 72 si proj4 está disponible y el punto cae en Bélgica. */
+    function toLambert72(lat, lng) {
+      const b = CONFIG.belgium;
+      if (!window.proj4 || lat < b.minLat || lat > b.maxLat || lng < b.minLng || lng > b.maxLng) return null;
+      try {
+        const [x, y] = proj4('EPSG:4326', 'EPSG:31370', [lng, lat]);
+        return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+      } catch (err) {
+        console.warn('Lambert 72 conversion failed', err);
+        return null;
+      }
+    }
+
+    /* ---------- Toasts ---------- */
+    function toast(message, type = 'info', timeout = 5000) {
+      const el = document.createElement('div');
+      el.className = `toast ${type}`;
+      const icon = { info: 'ℹ️', success: '✅', warning: '⚠️', error: '⛔' }[type] || 'ℹ️';
+      el.innerHTML = `<span>${icon}</span><span>${esc(message)}</span>`;
+      dom.toasts.appendChild(el);
+      const remove = () => { el.classList.add('is-leaving'); setTimeout(() => el.remove(), 260); };
+      el.addEventListener('click', remove);
+      setTimeout(remove, type === 'error' ? timeout + 3000 : timeout);
+    }
+
+    function showFatal(msg) {
+      dom.fatal.textContent = msg;
+      dom.fatal.classList.add('is-visible');
+    }
+
+    /* ==========================================================
+       4. LIBRARY CHECK
+       ========================================================== */
+    const missing = [];
+    if (!window.L) missing.push('Leaflet');
+    if (!window.exifr) missing.push('exifr');
+    if (!window.jspdf || !window.jspdf.jsPDF) missing.push('jsPDF');
+    if (missing.length) {
+      showFatal(`⛔ No se pudieron cargar las librerías: ${missing.join(', ')}. ` +
+        'Comprueba la conexión a Internet (las librerías y teselas del mapa se cargan desde CDN) y recarga la página.');
+    }
+    if (!window.L) return; // sin Leaflet la aplicación no puede funcionar
+    if (window.proj4) proj4.defs('EPSG:31370', EPSG_31370);
+
+    /* ==========================================================
+       5. MAP
+       ========================================================== */
+    const map = L.map('map', {
+      center: CONFIG.initialCenter,
+      zoom: CONFIG.initialZoom,
+      zoomControl: true,
+      preferCanvas: false
+    });
+
+    // Panel propio para etiquetas sobre la imagen satelital
+    map.createPane('labels');
+    map.getPane('labels').style.zIndex = 450;
+    map.getPane('labels').style.pointerEvents = 'none';
+
+    // Capas base libres de Esri (sin API key ni restricciones en file:/// ni local)
+    const baseLayers = {
+      '🗺️ Callejero': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19,
+        crossOrigin: true,
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, METI, TomTom'
+      }),
+      '🛰️ Satelital': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 20,
+        maxNativeZoom: 19,
+        crossOrigin: true,
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, and the GIS User Community'
+      }),
+      '🗺️ Carto': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 20,
+        subdomains: 'abcd',
+        crossOrigin: true,
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+      }),
+      '🗺️ OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        crossOrigin: true,
+        attribution: '&copy; OpenStreetMap contributors'
+      })
+    };
+    const overlays = {
+      '🏷️ Etiquetas y límites': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19,
+        crossOrigin: true,
+        pane: 'labels',
+        attribution: 'Reference &copy; Esri, HERE, Garmin'
+      })
+    };
+    baseLayers['🗺️ Callejero'].addTo(map);
+
+    // Al alternar capas: activar etiquetas sobre satélite automáticamente, quitarlas en callejero
+    map.on('baselayerchange', (e) => {
+      const labels = overlays['🏷️ Etiquetas y límites'];
+      if (e.layer === baseLayers['🛰️ Satelital']) {
+        if (!map.hasLayer(labels)) labels.addTo(map);
+      } else {
+        if (map.hasLayer(labels)) map.removeLayer(labels);
+      }
+    });
+
+    L.control.layers(baseLayers, overlays, { position: 'topright', collapsed: false }).addTo(map);
+    L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+
+    // Control "encuadrar todas las fotos"
+    const FitControl = L.Control.extend({
+      options: { position: 'topleft' },
+      onAdd() {
+        const div = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-fit');
+        div.innerHTML = '<a href="#" role="button" title="Encuadrar todas las fotos" aria-label="Encuadrar todas las fotos">⤢</a>';
+        L.DomEvent.disableClickPropagation(div);
+        L.DomEvent.on(div.firstChild, 'click', (ev) => { L.DomEvent.preventDefault(ev); fitAll(true); });
+        return div;
+      }
+    });
+    map.addControl(new FitControl());
+
+    const markersLayer = L.featureGroup().addTo(map);
+
+    /** Icono numerado (divIcon) según origen de las coordenadas. */
+    function numberedIcon(n, source, active) {
+      return L.divIcon({
+        className: 'num-marker-wrap',
+        html: `<div class="num-marker ${source}${active ? ' active' : ''}">${n}</div>`,
+        iconSize: [30, 38],
+        iconAnchor: [15, 38],
+        popupAnchor: [0, -36]
+      });
+    }
+
+    /** HTML del popup de una foto. */
+    function popupHtml(p, n) {
+      const w = CONFIG.popupImgWidth;
+      const h = Math.round(w * p.preview.h / p.preview.w);
+      const l72 = toLambert72(p.coords.lat, p.coords.lng);
+      const note = p.note.trim();
+      return `
+        <div class="popup" style="width:${w}px">
+          <img src="${p.preview.url}" width="${w}" height="${h}" alt="Foto ${n}">
+          <div class="popup-title">#${n} · ${esc(p.name)}</div>
+          <dl>
+            <dt>Fecha</dt><dd>${esc(fmtDateTime(p.date))}${p.dateSource === 'file' ? ' <span title="Sin fecha EXIF">(archivo)</span>' : ''}</dd>
+            <dt>WGS84</dt><dd class="mono">${fmtCoord(p.coords.lat)}, ${fmtCoord(p.coords.lng)}</dd>
+            ${l72 ? `<dt>L72</dt><dd class="mono">X ${fmtMeters(l72.x)} · Y ${fmtMeters(l72.y)}</dd>` : ''}
+            ${p.alt != null ? `<dt>Altitud</dt><dd>${p.alt.toFixed(1)} m</dd>` : ''}
+            <dt>Origen</dt><dd>${p.source === 'manual' ? '📍 Ubicación manual (arrastrable)' : '🛰️ GPS EXIF'}${p.accuracy != null ? ` · ±${p.accuracy.toFixed(0)} m` : ''}</dd>
+          </dl>
+          <div class="popup-note${note ? '' : ' empty-note'}">${note ? esc(note) : 'Sin anotación técnica'}</div>
+        </div>`;
+    }
+
+    /** Reconstruye todos los marcadores a partir del estado. */
+    function renderMarkers() {
+      markersLayer.clearLayers();
+      state.markers.clear();
+
+      state.photos.forEach((p, i) => {
+        if (!p.coords) return;
+        const n = i + 1;
+        const marker = L.marker([p.coords.lat, p.coords.lng], {
+          icon: numberedIcon(n, p.source, p.id === state.activeId),
+          title: `#${n} ${p.name}`,
+          draggable: p.source === 'manual',   // las posiciones GPS originales no se pueden arrastrar
+          riseOnHover: true
+        });
+        marker.bindPopup(() => popupHtml(p, photoIndex(p.id) + 1), { maxWidth: 320, minWidth: 280, autoPanPadding: [40, 40] });
+
+        marker.on('click', (ev) => {
+          if (state.placingId) {
+            assignManualPlacement(ev.latlng || marker.getLatLng());
+            return;
+          }
+          setActive(p.id, { scroll: true });
+        });
+        marker.on('dragend', () => {
+          const ll = marker.getLatLng();
+          p.coords = { lat: ll.lat, lng: ll.lng };
+          updateCardCoords(p);
+          toast(`Foto #${photoIndex(p.id) + 1} reubicada: ${fmtCoord(ll.lat)}, ${fmtCoord(ll.lng)}`, 'success', 2500);
+        });
+
+        marker.addTo(markersLayer);
+        state.markers.set(p.id, marker);
+      });
+    }
+
+    /** Ajusta el zoom para encuadrar todos los marcadores. */
+    function fitAll(animate = true) {
+      if (!markersLayer.getLayers().length) {
+        if (animate) toast('Todavía no hay fotos ubicadas en el mapa.', 'info', 2500);
+        return;
+      }
+      map.fitBounds(markersLayer.getBounds(), { padding: [60, 60], maxZoom: CONFIG.focusZoom, animate });
+    }
+
+    /** Centra suavemente el mapa en la foto y abre su popup. */
+    function focusPhoto(id) {
+      const p = getPhoto(id);
+      if (!p) return;
+      setActive(id);
+      if (!p.coords) {
+        toast('Esta foto no tiene ubicación. Usa «📍 Ubicar manualmente en el mapa».', 'warning', 3500);
+        return;
+      }
+      const marker = state.markers.get(id);
+      if (!marker) return;
+      const target = L.latLng(p.coords.lat, p.coords.lng);
+      const zoom = Math.max(map.getZoom(), CONFIG.focusZoom - 1);
+
+      // Evita flyTo de distancia cero (puede producir animaciones inválidas)
+      if (map.getCenter().distanceTo(target) < 0.5 && map.getZoom() === zoom) {
+        marker.openPopup();
+        return;
+      }
+      map.closePopup();
+      map.once('moveend', () => marker.openPopup());
+      map.flyTo(target, zoom, { duration: 1.1 });
+    }
+
+    /** Marca la foto activa (tarjeta + marcador). */
+    function setActive(id, { scroll = false } = {}) {
+      const prev = state.activeId;
+      state.activeId = id;
+
+      [prev, id].forEach((pid) => {
+        if (!pid) return;
+        const p = getPhoto(pid);
+        const m = state.markers.get(pid);
+        if (p && m) m.setIcon(numberedIcon(photoIndex(pid) + 1, p.source, pid === id));
+      });
+
+      dom.list.querySelectorAll('.card').forEach((c) => c.classList.toggle('is-active', c.dataset.id === id));
+      if (scroll) {
+        const card = dom.list.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+        card?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    /* ==========================================================
+       6. MANUAL PLACEMENT (fotos sin GPS)
+       ========================================================== */
+    function startPlacement(id) {
+      const p = getPhoto(id);
+      if (!p) return;
+      state.placingId = id;
+      map.closePopup();
+      dom.map.classList.add('is-placing');
+      dom.bannerText.innerHTML = `Haz clic en el mapa para ubicar <b>#${photoIndex(id) + 1} · ${esc(p.name)}</b>`;
+      dom.banner.classList.add('is-visible');
+      dom.list.querySelectorAll('.card').forEach((c) => c.classList.toggle('is-placing', c.dataset.id === id));
+      renderList(); // actualiza el botón a "Cancelar"
+      if (window.matchMedia('(max-width: 860px)').matches) {
+        dom.map.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    function cancelPlacement() {
+      if (!state.placingId) return;
+      state.placingId = null;
+      dom.map.classList.remove('is-placing');
+      dom.banner.classList.remove('is-visible');
+      renderList();
+    }
+
+    function assignManualPlacement(latlng) {
+      if (!state.placingId) return;
+      const p = getPhoto(state.placingId);
+      cancelPlacement();
+      if (!p) return;
+      p.coords = { lat: latlng.lat, lng: latlng.lng };
+      p.source = 'manual';
+      p.alt = null;
+      p.accuracy = null;
+      renderAll();
+      setActive(p.id, { scroll: true });
+      state.markers.get(p.id)?.openPopup();
+      toast(`Foto #${photoIndex(p.id) + 1} ubicada manualmente. Puedes arrastrar el marcador para afinar.`, 'success', 3500);
+    }
+
+    map.on('click', (e) => assignManualPlacement(e.latlng));
+
+    dom.btnCancelPlacing.addEventListener('click', cancelPlacement);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cancelPlacement(); });
+
+    /* ==========================================================
+       7. SIDEBAR RENDERING
+       ========================================================== */
+    function coordsHtml(p) {
+      if (!p.coords) return '<span class="muted">⚠️ Sin datos GPS</span>';
+      const alt = p.alt != null ? ` · ${p.alt.toFixed(1)} m` : '';
+      return `📍 ${fmtCoord(p.coords.lat)}, ${fmtCoord(p.coords.lng)}<span class="muted">${alt}</span>`;
+    }
+
+    function tagHtml(p) {
+      if (p.source === 'gps') return '<span class="tag tag-gps">GPS EXIF</span>';
+      if (p.source === 'manual') return '<span class="tag tag-manual">UBICACIÓN MANUAL</span>';
+      return '<span class="tag tag-none">SIN UBICACIÓN</span>';
+    }
+
+    function cardHtml(p, n) {
+      const placing = state.placingId === p.id;
+      let locateBlock = '';
+      if (placing) {
+        locateBlock = '<button type="button" class="btn btn-cancel" data-action="cancel">✕ Cancelar ubicación manual</button>';
+      } else if (!p.coords) {
+        locateBlock = '<button type="button" class="btn btn-locate" data-action="locate">📍 Ubicar manualmente en el mapa</button>';
+      }
+
+      return `
+        <article class="card${p.id === state.activeId ? ' is-active' : ''}${placing ? ' is-placing' : ''}" data-id="${esc(p.id)}">
+          <div class="card-top">
+            <div class="thumb-wrap">
+              <img src="${p.thumb.url}" alt="Miniatura ${esc(p.name)}" loading="lazy">
+              <span class="card-num">${n}</span>
+            </div>
+            <div class="card-meta">
+              <div class="card-name" title="${esc(p.name)}">${esc(p.name)}</div>
+              <div class="meta-row">🕒 ${esc(fmtDateTime(p.date))}${p.dateSource === 'file'
+                ? ' <span class="muted" title="La foto no contiene fecha EXIF; se usa la fecha del archivo">(archivo)</span>' : ''}</div>
+              <div class="meta-row mono" data-role="coords">${coordsHtml(p)}</div>
+              <span data-role="tag">${tagHtml(p)}</span>
+            </div>
+            <button type="button" class="icon-btn" data-action="delete" title="Eliminar foto" aria-label="Eliminar foto">✕</button>
+          </div>
+          ${locateBlock}
+          <label class="note-label" for="note-${esc(p.id)}">Anotación / Daño observado</label>
+          <textarea id="note-${esc(p.id)}" data-role="note" rows="2"
+            placeholder="Ej.: Haarscheur in gevel 2mm · Vochtplek kelder">${esc(p.note)}</textarea>
+          ${p.coords && !placing ? `
+          <div class="card-actions">
+            <button type="button" class="link-btn" data-action="locate">↺ Reubicar en el mapa</button>
+          </div>` : ''}
+        </article>`;
+    }
+
+    function renderList() {
+      if (!state.photos.length) {
+        dom.list.innerHTML = `<div class="empty">Aún no hay fotos cargadas.<br>
+          Añade fotos JPG tomadas en obra para comenzar la plaatsbeschrijving.</div>`;
+        return;
+      }
+      // Conservar foco/cursor si el usuario estaba escribiendo
+      const focused = document.activeElement?.matches?.('textarea[data-role="note"]') ? document.activeElement : null;
+      const focusId = focused?.closest('.card')?.dataset.id;
+      const selStart = focused?.selectionStart;
+
+      dom.list.innerHTML = state.photos.map((p, i) => cardHtml(p, i + 1)).join('');
+
+      if (focusId) {
+        const ta = dom.list.querySelector(`.card[data-id="${CSS.escape(focusId)}"] textarea`);
+        if (ta) { ta.focus(); ta.setSelectionRange(selStart, selStart); }
+      }
+    }
+
+    function updateCardCoords(p) {
+      const card = dom.list.querySelector(`.card[data-id="${CSS.escape(p.id)}"]`);
+      if (!card) return;
+      card.querySelector('[data-role="coords"]').innerHTML = coordsHtml(p);
+      card.querySelector('[data-role="tag"]').innerHTML = tagHtml(p);
+    }
+
+    function updateStats() {
+      const total = state.photos.length;
+      const gps = state.photos.filter((p) => p.source === 'gps').length;
+      const manual = state.photos.filter((p) => p.source === 'manual').length;
+      dom.stats.total.textContent = total;
+      dom.stats.gps.textContent = gps;
+      dom.stats.manual.textContent = manual;
+      dom.stats.none.textContent = total - gps - manual;
+      dom.btnExport.disabled = !total || state.busy;
+      dom.btnClear.disabled = !total || state.busy;
+    }
+
+    function renderAll() {
+      renderList();
+      renderMarkers();
+      updateStats();
+    }
+
+    // ---- Delegación de eventos en la lista ----
+    dom.list.addEventListener('click', (e) => {
+      const card = e.target.closest('.card');
+      if (!card) return;
+      const id = card.dataset.id;
+      const actionEl = e.target.closest('[data-action]');
+
+      if (actionEl) {
+        e.stopPropagation();
+        const action = actionEl.dataset.action;
+        if (action === 'locate') startPlacement(id);
+        else if (action === 'cancel') cancelPlacement();
+        else if (action === 'delete') deletePhoto(id);
+        return;
+      }
+      if (e.target.closest('textarea, input, label')) return;
+      focusPhoto(id);
+    });
+
+    dom.list.addEventListener('input', (e) => {
+      if (!e.target.matches('textarea[data-role="note"]')) return;
+      const id = e.target.closest('.card').dataset.id;
+      const p = getPhoto(id);
+      if (!p) return;
+      p.note = e.target.value;
+
+      // Actualización diferida del popup (debounce)
+      clearTimeout(state.noteTimers.get(id));
+      state.noteTimers.set(id, setTimeout(() => {
+        const m = state.markers.get(id);
+        // El contenido del popup es una función: update() lo regenera con la nota actual
+        if (m && m.isPopupOpen()) m.getPopup().update();
+      }, 250));
+    });
+
+    function deletePhoto(id) {
+      const p = getPhoto(id);
+      if (!p) return;
+      if (!confirm(`¿Eliminar la foto «${p.name}» del informe?`)) return;
+      if (state.placingId === id) cancelPlacement();
+      state.photos = state.photos.filter((x) => x.id !== id);
+      if (state.activeId === id) state.activeId = null;
+      renderAll();
+    }
+
+    dom.btnClear.addEventListener('click', () => {
+      if (!state.photos.length) return;
+      if (!confirm(`¿Eliminar las ${state.photos.length} fotos y sus anotaciones?`)) return;
+      cancelPlacement();
+      state.photos = [];
+      state.activeId = null;
+      renderAll();
+      map.flyTo(CONFIG.initialCenter, CONFIG.initialZoom, { duration: 0.8 });
+    });
+
+    /* ==========================================================
+       8. FILE PROCESSING (EXIF / GPS)
+       ========================================================== */
+    const isJpegName = (f) => /\.(jpe?g|jfif)$/i.test(f.name);
+    const isJpegType = (f) => f.type === 'image/jpeg' || f.type === 'image/pjpeg';
+    const isHeicName = (f) => /\.(heic|heif)$/i.test(f.name);
+    const isHeicType = (f) => /^image\/hei[cf]$/i.test(f.type);
+
+    /** Comprueba la firma binaria JPEG (FF D8 FF). */
+    async function assertJpegSignature(file) {
+      const head = new Uint8Array(await file.slice(0, 3).arrayBuffer());
+      if (head.length < 3 || head[0] !== 0xFF || head[1] !== 0xD8 || head[2] !== 0xFF) {
+        throw new Error('el contenido no es un JPEG válido (cabecera incorrecta o archivo dañado)');
+      }
+    }
+
+    /** Decodifica la imagen; rechaza si está corrupta. */
+    function decodeImage(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          if (!img.naturalWidth || !img.naturalHeight) {
+            URL.revokeObjectURL(url);
+            reject(new Error('imagen vacía o dañada'));
+          } else {
+            resolve({ img, url });
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error('archivo dañado o ilegible (no se pudo decodificar la imagen)'));
+        };
+        img.src = url;
+      });
+    }
+
+    function scaledCanvas(img, maxSize, orientation = 1) {
+      const sourceW = Number(img.naturalWidth || img.width);
+      const sourceH = Number(img.naturalHeight || img.height);
+      if (!Number.isFinite(sourceW) || !Number.isFinite(sourceH) || sourceW <= 0 || sourceH <= 0) {
+        throw new Error('la foto no tiene dimensiones válidas');
+      }
+      const exifOrientation = [1, 2, 3, 4, 5, 6, 7, 8].includes(Number(orientation))
+        ? Number(orientation)
+        : 1;
+      const swapsDimensions = exifOrientation >= 5;
+      const orientedW = swapsDimensions ? sourceH : sourceW;
+      const orientedH = swapsDimensions ? sourceW : sourceH;
+      const ratio = Math.min(1, maxSize / Math.max(orientedW, orientedH));
+      const w = Math.max(1, Math.round(orientedW * ratio));
+      const h = Math.max(1, Math.round(orientedH * ratio));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('el navegador no pudo crear el lienzo para procesar la foto');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.imageSmoothingQuality = 'high';
+      const transforms = {
+        1: [ratio, 0, 0, ratio, 0, 0],
+        2: [-ratio, 0, 0, ratio, w, 0],
+        3: [-ratio, 0, 0, -ratio, w, h],
+        4: [ratio, 0, 0, -ratio, 0, h],
+        5: [0, ratio, ratio, 0, 0, 0],
+        6: [0, ratio, -ratio, 0, w, 0],
+        7: [0, -ratio, -ratio, 0, w, h],
+        8: [0, -ratio, ratio, 0, 0, h]
+      };
+      ctx.setTransform(...transforms[exifOrientation]);
+      ctx.drawImage(img, 0, 0, sourceW, sourceH);
+      return { canvas, w, h };
+    }
+
+    function scaleImage(img, maxSize, quality = 0.82, orientation = 1) {
+      const { canvas, w, h } = scaledCanvas(img, maxSize, orientation);
+      try {
+        return { url: canvas.toDataURL('image/jpeg', quality), w, h };
+      } finally {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    }
+
+    async function decodeImageForOrientation(file) {
+      if (typeof createImageBitmap === 'function') {
+        try {
+          const bitmap = await createImageBitmap(file, { imageOrientation: 'none' });
+          return { image: bitmap, release: () => bitmap.close() };
+        } catch (err) {
+          console.warn(`Decodificación sin orientación EXIF no disponible para ${file.name}; se usará la orientación del navegador.`, err);
+        }
+      }
+      const { img, url } = await decodeImage(file);
+      return { image: img, release: () => URL.revokeObjectURL(url), appliesExifOrientation: true };
+    }
+
+    async function convertHeicToJpeg(file) {
+      if (typeof window.heic2any !== 'function') {
+        throw new Error('no se pudo cargar el conversor HEIC. Comprueba la conexión y recarga la aplicación');
+      }
+      const result = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+      const blob = Array.isArray(result) ? result[0] : result;
+      if (!(blob instanceof Blob) || !blob.size) {
+        throw new Error('el conversor no devolvió una imagen JPEG válida');
+      }
+      return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), {
+        type: 'image/jpeg',
+        lastModified: file.lastModified
+      });
+    }
+
+    /** Lee EXIF con exifr. Devuelve null si no hay metadatos o falla la lectura. */
+    async function readExif(file) {
+      if (!window.exifr) return null;
+      try {
+        return await exifr.parse(file, {
+          tiff: true, exif: true, gps: true,
+          xmp: false, icc: false, iptc: false, jfif: false, ihdr: false
+        }) || null;
+      } catch (err) {
+        console.warn(`EXIF no legible en ${file.name}:`, err);
+        return null;
+      }
+    }
+
+    /** Extrae coordenadas, altitud y precisión GPS. */
+    function extractGps(meta) {
+      if (!meta) return null;
+      const lat = Number(meta.latitude);
+      const lng = Number(meta.longitude);
+      const valid = Number.isFinite(lat) && Number.isFinite(lng) &&
+        Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+      if (!valid) return null;
+
+      let alt = Number(meta.GPSAltitude);
+      if (Number.isFinite(alt)) {
+        let ref = meta.GPSAltitudeRef;
+        if (ref && typeof ref === 'object' && 'length' in ref) ref = ref[0];
+        if (Number(ref) === 1 || /below/i.test(String(ref))) alt = -alt;
+      } else {
+        alt = null;
+      }
+      const acc = Number(meta.GPSHPositioningError);
+      return { lat, lng, alt, accuracy: Number.isFinite(acc) ? acc : null };
+    }
+
+    /** Fecha de captura EXIF (con parseo de cadenas "YYYY:MM:DD HH:MM:SS"). */
+    function extractDate(meta) {
+      const raw = meta && (meta.DateTimeOriginal || meta.CreateDate || meta.DateTimeDigitized || meta.ModifyDate);
+      if (raw instanceof Date && !isNaN(raw)) return raw;
+      if (typeof raw === 'string') {
+        const m = raw.match(/^(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/);
+        if (m) {
+          const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+          if (!isNaN(d)) return d;
+        }
+      }
+      return null;
+    }
+
+    /** Procesa un archivo y devuelve un objeto Photo. Lanza Error si no es válido. */
+    async function processPhoto(file) {
+      const [meta, decodeFile] = await Promise.all([
+        readExif(file),
+        (isHeicName(file) || isHeicType(file))
+          ? convertHeicToJpeg(file)
+          : Promise.resolve(file)
+      ]);
+      await assertJpegSignature(decodeFile);
+      const decoded = await decodeImageForOrientation(decodeFile);
+      const orientation = decoded.appliesExifOrientation ? 1 : Number(meta?.Orientation || 1);
+
+      let thumb, preview, report;
+      try {
+        thumb = scaleImage(decoded.image, CONFIG.thumbSize, 0.8, orientation);
+        preview = scaleImage(decoded.image, CONFIG.previewSize, 0.82, orientation);
+        report = scaleImage(decoded.image, CONFIG.reportSize, 0.82, orientation);
+      } finally {
+        decoded.release();
+      }
+
+      const gps = extractGps(meta);
+      const exifDate = extractDate(meta);
+      const camera = [meta?.Make, meta?.Model].filter(Boolean).join(' ').trim();
+
+      return {
+        id: uid(),
+        name: file.name,
+        size: file.size,
+        lastModified: file.lastModified,
+        thumb,
+        preview,
+        report,
+        date: exifDate || new Date(file.lastModified),
+        dateSource: exifDate ? 'exif' : 'file',
+        coords: gps ? { lat: gps.lat, lng: gps.lng } : null,
+        alt: gps ? gps.alt : null,
+        accuracy: gps ? gps.accuracy : null,
+        source: gps ? 'gps' : null,
+        camera,
+        note: ''
+      };
+    }
+
+    function setProgress(done, total, label = 'Procesando') {
+      dom.progress.classList.add('is-visible');
+      dom.progressText.textContent = label === 'photo'
+        ? `Procesando foto ${done} de ${total}...`
+        : `${label} ${done} / ${total}…`;
+      dom.progressFill.style.width = `${Math.round((done / total) * 100)}%`;
+    }
+    function hideProgress() {
+      dom.progress.classList.remove('is-visible');
+      dom.progressFill.style.width = '0';
+    }
+
+    /** Punto de entrada: valida, procesa secuencialmente y añade las fotos. */
+    async function handleFiles(fileList) {
+      if (state.busy) { toast('Espera a que termine el procesamiento actual.', 'warning'); return; }
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+
+      const accepted = [];
+      for (const f of files) {
+        if (!isJpegType(f) && !isJpegName(f) && !isHeicType(f) && !isHeicName(f)) {
+          toast(`«${f.name}»: formato no soportado. Se admiten fotos JPG/JPEG y HEIC/HEIF.`, 'error');
+          continue;
+        }
+        if (f.size === 0) { toast(`«${f.name}»: el archivo está vacío.`, 'error'); continue; }
+        if (f.size > CONFIG.maxFileSizeMB * 1024 * 1024) {
+          toast(`«${f.name}»: supera el tamaño máximo (${CONFIG.maxFileSizeMB} MB).`, 'error');
+          continue;
+        }
+        const dup = state.photos.some((p) => p.name === f.name && p.size === f.size && p.lastModified === f.lastModified) ||
+          accepted.some((a) => a.name === f.name && a.size === f.size);
+        if (dup) { toast(`«${f.name}» ya está cargada; se omite el duplicado.`, 'warning', 3000); continue; }
+        accepted.push(f);
+      }
+      if (!accepted.length) return;
+
+      state.busy = true;
+      updateStats();
+      const added = [];
+      let failed = 0;
+
+      for (let i = 0; i < accepted.length; i++) {
+        setProgress(i + 1, accepted.length, 'photo');
+        await nextFrame(); // deja respirar a la UI
+        try {
+          added.push(await processPhoto(accepted[i]));
+        } catch (err) {
+          failed++;
+          console.error(err);
+          toast(`«${accepted[i].name}»: ${err.message || 'error desconocido'}`, 'error');
+        }
+      }
+
+      // Orden cronológico dentro del lote
+      added.sort((a, b) => a.date - b.date);
+      state.photos.push(...added);
+      state.busy = false;
+      renderAll();
+      if (added.length) fitAll(false);
+      setProgress(accepted.length, accepted.length, 'Fotos procesadas');
+      await nextFrame();
+      hideProgress();
+
+      const noGps = added.filter((p) => !p.coords).length;
+      if (added.length) {
+        toast(`${added.length} foto(s) añadida(s)${failed ? `, ${failed} con error` : ''}.`, 'success', 3000);
+      }
+      if (noGps) {
+        toast(`${noGps} foto(s) sin GPS. Usa «📍 Ubicar manualmente en el mapa» en su tarjeta.`, 'warning', 6000);
+      }
+    }
+
+    /* ---------- Upload UI: click, teclado, drag & drop ---------- */
+    dom.dropzone.addEventListener('click', () => dom.fileInput.click());
+    dom.dropzone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dom.fileInput.click(); }
+    });
+    dom.fileInput.addEventListener('change', (e) => {
+      handleFiles(e.target.files);
+      e.target.value = ''; // permite volver a seleccionar los mismos archivos
+    });
+
+    // Drag & drop en toda la ventana (evita que el navegador abra la imagen)
+    let dragDepth = 0;
+    const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+    window.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      dom.dropOverlay.classList.add('is-visible');
+      dom.dropzone.classList.add('is-over');
+    });
+    window.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+    window.addEventListener('dragleave', (e) => {
+      if (!hasFiles(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) { dom.dropOverlay.classList.remove('is-visible'); dom.dropzone.classList.remove('is-over'); }
+    });
+    window.addEventListener('drop', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      dom.dropOverlay.classList.remove('is-visible');
+      dom.dropzone.classList.remove('is-over');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    /* ---------- Carga de fotos de prueba (Demo Bélgica) ---------- */
+    async function createDemoPhoto(cfg) {
+      const w = 800, h = 600;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+
+      if (cfg.type === 'brick') {
+        // Fachada de ladrillo cara vista (Amberes)
+        ctx.fillStyle = '#9a3412';
+        ctx.fillRect(0, 0, w, h);
+        // Textura y juntas de mortero
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 4;
+        const rh = 32, cw = 75;
+        for (let y = 0; y < h; y += rh) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
+          ctx.stroke();
+          const off = (Math.floor(y / rh) % 2) * (cw / 2);
+          for (let x = off; x < w; x += cw) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + rh);
+            ctx.stroke();
+          }
+        }
+        // Fisura / grieta capilar visible (1.5mm)
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(w * 0.42, h * 0.12);
+        ctx.lineTo(w * 0.45, h * 0.32);
+        ctx.lineTo(w * 0.43, h * 0.52);
+        ctx.lineTo(w * 0.49, h * 0.76);
+        ctx.lineTo(w * 0.47, h * 0.92);
+        ctx.stroke();
+      } else if (cfg.type === 'concrete') {
+        // Muro de sótano de hormigón (Kruibeke)
+        ctx.fillStyle = '#64748b';
+        ctx.fillRect(0, 0, w, h);
+        for (let i = 0; i < 35; i++) {
+          ctx.fillStyle = i % 2 === 0 ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.07)';
+          ctx.beginPath();
+          ctx.arc((i * 97) % w, (i * 131) % h, (i * 13) % 90 + 20, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Mancha de humedad (vochtplek)
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+        ctx.beginPath();
+        ctx.ellipse(w * 0.52, h * 0.58, 200, 130, Math.PI / 10, 0, Math.PI * 2);
+        ctx.fill();
+        // Eflorescencia salina
+        ctx.strokeStyle = 'rgba(248, 250, 252, 0.45)';
+        ctx.lineWidth = 5;
+        ctx.stroke();
+      } else {
+        // Pavimento de adoquines / acera (Gante)
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 3;
+        for (let x = 0; x < w; x += 45) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x + 25, h);
+          ctx.stroke();
+        }
+        for (let y = 0; y < h; y += 35) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
+          ctx.stroke();
+        }
+        // Desnivel / escalón de hundimiento (verzakking)
+        ctx.strokeStyle = '#020617';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(w * 0.08, h * 0.62);
+        ctx.bezierCurveTo(w * 0.35, h * 0.75, w * 0.65, h * 0.72, w * 0.92, h * 0.58);
+        ctx.stroke();
+      }
+
+      // Franja técnica inferior estilo cámara pericial
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.fillRect(0, h - 54, w, 54);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 15px -apple-system, sans-serif';
+      ctx.fillText(`📍 ${cfg.title} · ${fmtCoord(cfg.lat)}°N, ${fmtCoord(cfg.lng)}°E · Alt: ${cfg.alt.toFixed(1)}m`, 18, h - 31);
+      ctx.font = '12px monospace';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText(`🕒 ${fmtDateTime(cfg.date)} | 📷 ${cfg.camera}`, 18, h - 12);
+
+      // Convertir el lienzo en una imagen JPEG.
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.88));
+
+      const thumb = scaleImage(canvas, CONFIG.thumbSize, 0.8);
+      const preview = scaleImage(canvas, CONFIG.previewSize, 0.82);
+      const report = scaleImage(canvas, CONFIG.reportSize, 0.85);
+
+      return {
+        id: uid(),
+        name: cfg.filename,
+        size: blob.size,
+        lastModified: cfg.date.getTime(),
+        thumb,
+        preview,
+        report,
+        date: cfg.date,
+        dateSource: 'exif',
+        coords: { lat: cfg.lat, lng: cfg.lng },
+        alt: cfg.alt,
+        accuracy: 2.8,
+        source: 'gps',
+        camera: cfg.camera,
+        note: cfg.note
+      };
+    }
+
+    async function loadDemoPhotos() {
+      if (state.busy) return;
+      state.busy = true;
+      dom.btnDemo.disabled = true;
+      dom.btnDemo.textContent = '⏳ Cargando fotos demo…';
+
+      try {
+        // Autocompletar datos del proyecto si están vacíos para agilizar la prueba
+        if (!dom.fields.project.value) dom.fields.project.value = 'Nieuwbouw residentie De Kaaien';
+        if (!dom.fields.address.value) dom.fields.address.value = 'Scheldekaai & Waasland corridor, Vlaanderen';
+        if (!dom.fields.expert.value) dom.fields.expert.value = 'Ing. J. Peeters (Gerechtsdeskundige)';
+        if (!dom.fields.ref.value) dom.fields.ref.value = 'PB-2026-BEL-01';
+        saveProject();
+
+        const demoList = [
+          {
+            title: 'Antwerpen · Scheldekaai (Waasland)',
+            filename: 'IMG_20261028_101422_Gevel.jpg',
+            type: 'brick',
+            lat: 51.2145,
+            lng: 4.3982,
+            alt: 8.5,
+            date: new Date(2026, 9, 28, 10, 14, 22),
+            camera: 'Apple iPhone 15 Pro',
+            note: 'Haarscheur in bakstenen gevel (breedte ca. 1.5mm) ter hoogte van raamdorpel eerste verdieping.'
+          },
+          {
+            title: 'Kruibeke · Bazel (Scheldelei)',
+            filename: 'SAM_20261028_114510_Kelder.jpg',
+            type: 'concrete',
+            lat: 51.1712,
+            lng: 4.3105,
+            alt: 5.2,
+            date: new Date(2026, 9, 28, 11, 45, 10),
+            camera: 'Samsung Galaxy S24',
+            note: 'Vochtplek kelderwand en lichte zoutuitbloeiing op circa 40cm boven vloerniveau.'
+          },
+          {
+            title: 'Gent · Historisch Centrum (Korenmarkt)',
+            filename: 'DSC_20261028_143005_Trottoir.jpg',
+            type: 'pavement',
+            lat: 51.0543,
+            lng: 3.7218,
+            alt: 9.1,
+            date: new Date(2026, 9, 28, 14, 30, 5),
+            camera: 'Sony DSC-RX100M7',
+            note: 'Verzakking van het trottoir (ca. 25mm) bij aansluiting met de perceelsgrens.'
+          }
+        ];
+
+        const photos = [];
+        for (let i = 0; i < demoList.length; i++) {
+          setProgress(i + 1, demoList.length, 'Generando demo');
+          await nextFrame();
+          const item = demoList[i];
+          photos.push(await createDemoPhoto(item));
+        }
+
+        photos.sort((a, b) => a.date - b.date);
+        state.photos.push(...photos);
+        renderAll();
+        fitAll(true);
+        setProgress(demoList.length, demoList.length, 'Fotos procesadas');
+        await nextFrame();
+        hideProgress();
+
+        toast('3 fotos de prueba en Bélgica cargadas. Coordenadas GPS y pines ubicados en el mapa.', 'success', 4000);
+      } catch (err) {
+        console.error(err);
+        toast(`Error al generar fotos demo: ${err.message || err}`, 'error');
+      } finally {
+        state.busy = false;
+        hideProgress();
+        dom.btnDemo.disabled = false;
+        dom.btnDemo.textContent = '🧪 Cargar 3 fotos de prueba (Demo Bélgica)';
+        updateStats();
+      }
+    }
+
+    dom.btnDemo.addEventListener('click', loadDemoPhotos);
+
+    /* ==========================================================
+       9. PROJECT METADATA (persistencia local)
+       ========================================================== */
+    function loadProject() {
+      try {
+        const data = JSON.parse(localStorage.getItem(CONFIG.storageKey) || '{}');
+        Object.entries(dom.fields).forEach(([k, el]) => {
+          if (data[k] === undefined) return;
+          if (el.type === 'checkbox') el.checked = !!data[k]; else el.value = data[k];
+        });
+      } catch { /* localStorage puede no estar disponible en file:/// en algunos navegadores */ }
+    }
+    function saveProject() {
+      try {
+        const data = {};
+        Object.entries(dom.fields).forEach(([k, el]) => { data[k] = el.type === 'checkbox' ? el.checked : el.value; });
+        localStorage.setItem(CONFIG.storageKey, JSON.stringify(data));
+      } catch { /* ignorar */ }
+    }
+    Object.values(dom.fields).forEach((el) => el.addEventListener('change', saveProject));
+    Object.values(dom.fields).forEach((el) => el.addEventListener('input', saveProject));
+    const projectInfo = () => ({
+      project: String(dom.fields.project?.value || '').trim(),
+      address: String(dom.fields.address?.value || '').trim(),
+      expert: String(dom.fields.expert?.value || '').trim(),
+      ref: String(dom.fields.ref?.value || '').trim(),
+      lang: (dom.fields.lang?.value && I18N[dom.fields.lang.value]) ? dom.fields.lang.value : 'nl',
+      annex: Boolean(dom.fields.annex?.checked)
+    });
+
+    /* ==========================================================
+       10. PDF REPORT (jsPDF + AutoTable)
+       ========================================================== */
+    const PDF = {
+      W: 210, H: 297, M: 15,
+      dark: [15, 23, 42], accent: [37, 99, 235], text: [30, 41, 59],
+      muted: [100, 116, 139], line: [203, 213, 225], soft: [241, 245, 249]
+    };
+
+    /**
+     * Escribe texto en el PDF validando estrictamente tipo y coordenadas numéricas.
+     * Previene cualquier error de 'Invalid arguments passed to jsPDF.text'.
+     */
+    function safeText(doc, rawText, rawX, rawY, options) {
+      if (!doc || typeof doc.text !== 'function') return false;
+
+      const x = Number(rawX);
+      const y = Number(rawY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        console.warn('safeText: Coordenadas no finitas:', { rawText, rawX, rawY });
+        return false;
+      }
+
+      let text;
+      if (Array.isArray(rawText)) {
+        text = rawText.map((t) => String(t ?? ''));
+      } else {
+        text = String(rawText ?? '');
+      }
+
+      if (text.length === 0) return false;
+
+      try {
+        if (options && typeof options === 'object') {
+          doc.text(text, x, y, options);
+        } else {
+          doc.text(text, x, y);
+        }
+        return true;
+      } catch (err) {
+        console.warn('safeText: Error al imprimir texto en PDF:', err, { text, x, y });
+        return false;
+      }
+    }
+
+    /**
+     * Dibuja de forma segura una imagen ajustada (contain) dentro de una caja en el anexo.
+     * Valida numéricamente cada coordenada con Math.round y aísla el estado gráfico.
+     */
+    function drawFitted(doc, img, rawX, rawY, rawW, rawH) {
+      if (!img) return false;
+      const imgUrl = (typeof img === 'string') ? img : img.url;
+      if (!imgUrl || typeof imgUrl !== 'string') return false;
+
+      // Asegurar que sea una cadena Base64 válida con cabecera data:
+      if (!imgUrl.startsWith('data:image/')) {
+        console.warn('drawFitted: Data URL no válida o sin cabecera de imagen.');
+        return false;
+      }
+
+      const x = Math.round(Number(rawX));
+      const y = Math.round(Number(rawY));
+      const boxW = Math.round(Number(rawW));
+      const boxH = Math.round(Number(rawH));
+
+      if (isNaN(x) || isNaN(y) || isNaN(boxW) || isNaN(boxH) || boxW <= 0 || boxH <= 0) {
+        console.warn('drawFitted: Coordenadas o dimensiones de caja inválidas:', { rawX, rawY, rawW, rawH });
+        return false;
+      }
+
+      // Detectar formato compatible con jsPDF (JPEG o PNG)
+      let format = 'JPEG';
+      if (imgUrl.startsWith('data:image/png')) {
+        format = 'PNG';
+      } else if (imgUrl.startsWith('data:image/jpeg') || imgUrl.startsWith('data:image/jpg')) {
+        format = 'JPEG';
+      }
+
+      // Proporción intrínseca segura
+      const origW = (Number(img.w) > 0) ? Number(img.w) : 4;
+      const origH = (Number(img.h) > 0) ? Number(img.h) : 3;
+
+      const ratio = Math.min(boxW / origW, boxH / origH);
+      const dw = Math.max(1, Math.round(origW * ratio));
+      const dh = Math.max(1, Math.round(origH * ratio));
+      const posX = Math.round(x + (boxW - dw) / 2);
+      const posY = Math.round(y + (boxH - dh) / 2);
+
+      if (!Number.isFinite(posX) || !Number.isFinite(posY) || !Number.isFinite(dw) || !Number.isFinite(dh) || dw <= 0 || dh <= 0) {
+        console.warn('drawFitted: Coordenadas calculadas no finitas:', { posX, posY, dw, dh });
+        return false;
+      }
+
+      if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+      try {
+        doc.addImage(imgUrl, format, posX, posY, dw, dh, undefined, 'FAST');
+        return true;
+      } catch (err) {
+        console.warn('No se pudo añadir la imagen al PDF:', err);
+        return false;
+      } finally {
+        if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+      }
+    }
+
+    /** Texto de coordenadas para el PDF. */
+    function coordLines(p, T) {
+      if (!p || !p.coords) return String(T.noLocation || 'Geen locatie');
+      const lines = [
+        `WGS84: ${fmtCoord(p.coords.lat)}, ${fmtCoord(p.coords.lng)}`,
+        `Methode: ${p.source === 'manual' ? T.srcManual : T.srcGps}`
+      ];
+      const l72 = toLambert72(p.coords.lat, p.coords.lng);
+      if (l72) lines.push(`L72: X ${l72.x.toFixed(1)} / Y ${l72.y.toFixed(1)}`);
+      if (p.alt != null) lines.push(`${T.alt}: ${p.alt.toFixed(1)} m`);
+      return lines.join('\n');
+    }
+
+    function renderSchematicPositionPlan(doc, photos, T) {
+      const located = photos
+        .map((photo, index) => ({ photo, index, coords: photo.coords }))
+        .filter((entry) => entry.coords);
+      const missing = photos.length - located.length;
+      const meanLat = located.length
+        ? located.reduce((sum, entry) => sum + entry.coords.lat, 0) / located.length
+        : 50.5;
+      const cosLat = Math.cos(meanLat * Math.PI / 180);
+      const points = located.map((entry) => ({
+        ...entry,
+        x: entry.coords.lng * cosLat,
+        y: entry.coords.lat
+      }));
+      let minX = points.length ? Math.min(...points.map((point) => point.x)) : 2.5 * cosLat;
+      let maxX = points.length ? Math.max(...points.map((point) => point.x)) : 6.45 * cosLat;
+      let minY = points.length ? Math.min(...points.map((point) => point.y)) : 49.45;
+      let maxY = points.length ? Math.max(...points.map((point) => point.y)) : 51.56;
+      if (maxX - minX < 0.0002) { minX -= 0.0001; maxX += 0.0001; }
+      if (maxY - minY < 0.0002) { minY -= 0.0001; maxY += 0.0001; }
+
+      const plot = { x: 34, y: 48, w: 146, h: 176 };
+      const scale = Math.min((plot.w - 24) / (maxX - minX), (plot.h - 24) / (maxY - minY));
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const placed = [];
+
+      doc.addPage();
+      sectionTitle(doc, String(T.positionPlan || 'Fotoplan'), 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...PDF.muted);
+      safeText(doc, String(T.planCount(located.length, missing)), PDF.M, 30);
+
+      doc.setDrawColor(...PDF.line);
+      doc.setLineWidth(0.25);
+      doc.setFillColor(255, 255, 255);
+      doc.rect(plot.x, plot.y, plot.w, plot.h, 'FD');
+      for (let i = 1; i < 4; i++) {
+        const gx = plot.x + (plot.w * i) / 4;
+        const gy = plot.y + (plot.h * i) / 4;
+        doc.line(gx, plot.y, gx, plot.y + plot.h);
+        doc.line(plot.x, gy, plot.x + plot.w, gy);
+      }
+
+      doc.setFontSize(6.5);
+      doc.setTextColor(...PDF.muted);
+      safeText(doc, fmtCoord(minY), plot.x - 2, plot.y + plot.h, { align: 'right' });
+      safeText(doc, fmtCoord(maxY), plot.x - 2, plot.y + 2, { align: 'right' });
+      safeText(doc, fmtCoord(minX / cosLat), plot.x, plot.y + plot.h + 5);
+      safeText(doc, fmtCoord(maxX / cosLat), plot.x + plot.w, plot.y + plot.h + 5, { align: 'right' });
+      safeText(doc, String(T.planLat || 'Lat'), plot.x - 2, plot.y - 3, { align: 'right' });
+      safeText(doc, String(T.planLon || 'Lon'), plot.x + plot.w, plot.y + plot.h + 11, { align: 'right' });
+
+      doc.setDrawColor(...PDF.dark);
+      doc.setLineWidth(0.6);
+      doc.line(plot.x + plot.w - 10, plot.y + 21, plot.x + plot.w - 10, plot.y + 8);
+      doc.line(plot.x + plot.w - 10, plot.y + 8, plot.x + plot.w - 13, plot.y + 13);
+      doc.line(plot.x + plot.w - 10, plot.y + 8, plot.x + plot.w - 7, plot.y + 13);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(...PDF.dark);
+      safeText(doc, 'N', plot.x + plot.w - 10, plot.y + 5, { align: 'center' });
+
+      points.forEach((point) => {
+        const baseX = plot.x + plot.w / 2 + (point.x - centerX) * scale;
+        const baseY = plot.y + plot.h / 2 - (point.y - centerY) * scale;
+        let x = baseX;
+        let y = baseY;
+        let attempt = 0;
+        while (placed.some((other) => Math.hypot(other.x - x, other.y - y) < 9) && attempt < 24) {
+          const angle = attempt * 2.4;
+          const radius = 5 + Math.floor(attempt / 8) * 3;
+          x = baseX + Math.cos(angle) * radius;
+          y = baseY + Math.sin(angle) * radius;
+          attempt++;
+        }
+        if (x !== baseX || y !== baseY) {
+          doc.setDrawColor(...PDF.muted);
+          doc.setLineWidth(0.2);
+          doc.line(baseX, baseY, x, y);
+        }
+        const color = point.photo.source === 'manual' ? [217, 119, 6] : PDF.dark;
+        doc.setFillColor(...color);
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(0.6);
+        doc.circle(x, y, 4.2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(point.index + 1 > 99 ? 5 : 6.5);
+        doc.setTextColor(255, 255, 255);
+        safeText(doc, String(point.index + 1), x, y + 1.8, { align: 'center' });
+        placed.push({ x, y });
+      });
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...PDF.text);
+      doc.setFillColor(...PDF.dark);
+      doc.circle(PDF.M + 3, 244, 2, 'F');
+      safeText(doc, String(T.planGps || 'GPS'), PDF.M + 8, 245.5);
+      doc.setFillColor(217, 119, 6);
+      doc.circle(PDF.M + 35, 244, 2, 'F');
+      safeText(doc, String(T.planManual || 'Manual'), PDF.M + 40, 245.5);
+      const metersPerMm = 111320 / scale;
+      const targetMeters = metersPerMm * 30;
+      const magnitude = 10 ** Math.floor(Math.log10(targetMeters));
+      const normalized = targetMeters / magnitude;
+      const scaleDistance = (normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1) * magnitude;
+      const scaleWidth = scaleDistance / metersPerMm;
+      const scaleX = PDF.M + 105;
+      const scaleY = 244;
+      doc.setFillColor(...PDF.dark);
+      doc.rect(scaleX, scaleY - 1, scaleWidth / 2, 2, 'F');
+      doc.setFillColor(255, 255, 255);
+      doc.rect(scaleX + scaleWidth / 2, scaleY - 1, scaleWidth / 2, 2, 'FD');
+      doc.setDrawColor(...PDF.dark);
+      doc.line(scaleX, scaleY - 2, scaleX, scaleY + 2);
+      doc.line(scaleX + scaleWidth, scaleY - 2, scaleX + scaleWidth, scaleY + 2);
+      doc.setFontSize(7);
+      const scaleLabel = scaleDistance >= 1000
+        ? `${Number((scaleDistance / 1000).toPrecision(2))} km`
+        : `${Math.round(scaleDistance)} m`;
+      safeText(doc, scaleLabel, scaleX + scaleWidth + 3, scaleY + 2);
+      doc.setFontSize(7.5);
+      doc.setTextColor(...PDF.muted);
+      safeText(doc, String(T.positionPlanNote || ''), PDF.M, 258, { maxWidth: PDF.W - 2 * PDF.M });
+      if (!located.length) {
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...PDF.dark);
+        safeText(doc, String(T.planEmpty || ''), PDF.M, 270, { maxWidth: PDF.W - 2 * PDF.M });
+      }
+    }
+
+    function hasRenderedMapTiles(canvas, mapElement) {
+      const tiles = Array.from(mapElement.querySelectorAll('img.leaflet-tile-loaded'))
+        .filter((tile) => tile.complete && tile.naturalWidth > 0);
+      if (!tiles.length) return false;
+
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return false;
+      const mapRect = mapElement.getBoundingClientRect();
+      const scaleX = canvas.width / mapRect.width;
+      const scaleY = canvas.height / mapRect.height;
+      const background = [229, 231, 235];
+
+      for (const tile of tiles) {
+        const rect = tile.getBoundingClientRect();
+        for (const fraction of [0.3, 0.5, 0.7]) {
+          const x = Math.round((rect.left - mapRect.left + rect.width * fraction) * scaleX);
+          const y = Math.round((rect.top - mapRect.top + rect.height * fraction) * scaleY);
+          if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) continue;
+          const pixel = context.getImageData(x, y, 1, 1).data;
+          if (pixel[3] > 0 && pixel.slice(0, 3).some((channel, i) => Math.abs(channel - background[i]) > 12)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    async function captureMapForPdf() {
+      if (!state.markers.size) return null;
+      if (typeof window.html2canvas !== 'function') {
+        console.warn('html2canvas no está disponible; se usará el plano esquemático.');
+        return null;
+      }
+
+      const bounds = markersLayer.getBounds();
+      if (!bounds.isValid()) return null;
+      const originalCenter = map.getCenter();
+      const originalZoom = map.getZoom();
+
+      try {
+        map.fitBounds(bounds, { padding: [35, 35] });
+        map.invalidateSize();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise((resolve) => setTimeout(resolve, 700));
+
+        const mapElement = dom.map;
+        let captureTimeout;
+        const canvas = await Promise.race([
+          window.html2canvas(mapElement, {
+            useCORS: true,
+            allowTaint: false,
+            backgroundColor: '#e5e7eb',
+            scale: 1,
+            imageTimeout: 12000,
+            logging: false,
+            ignoreElements: (element) => element.classList?.contains('leaflet-control') ||
+              element.classList?.contains('leaflet-popup')
+          }),
+          new Promise((resolve, reject) => {
+            captureTimeout = setTimeout(() => reject(new Error('la captura del mapa ha superado el tiempo máximo')), 18000);
+          })
+        ]).finally(() => clearTimeout(captureTimeout));
+        if (!canvas.width || !canvas.height || !hasRenderedMapTiles(canvas, mapElement)) {
+          throw new Error('las teselas del mapa no pudieron incluirse en la captura');
+        }
+
+        const mapSize = map.getSize();
+        const left = map.containerPointToLatLng([0, mapSize.y / 2]);
+        const right = map.containerPointToLatLng([mapSize.x, mapSize.y / 2]);
+        const metersPerPixel = map.distance(left, right) / mapSize.x;
+        if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+          throw new Error('no se pudo determinar la escala del mapa');
+        }
+        const activeBaseLayer = Object.entries(baseLayers).find(([, layer]) => map.hasLayer(layer));
+        const attribution = activeBaseLayer
+          ? {
+            '🗺️ Callejero': 'Tiles: © Esri',
+            '🛰️ Satelital': 'Imagery: © Esri and contributors',
+            '🗺️ Carto': 'Tiles: © OpenStreetMap contributors, © CARTO',
+            '🗺️ OpenStreetMap': 'Tiles: © OpenStreetMap contributors'
+          }[activeBaseLayer[0]]
+          : '';
+        return {
+          url: canvas.toDataURL('image/jpeg', 0.92),
+          width: canvas.width,
+          height: canvas.height,
+          metersPerPixel,
+          attribution
+        };
+      } catch (err) {
+        console.warn('No se pudo capturar el mapa para el PDF; se usará el plano esquemático.', err);
+        return null;
+      } finally {
+        map.setView(originalCenter, originalZoom, { animate: false });
+        map.invalidateSize();
+      }
+    }
+
+    function renderPositionPlan(doc, photos, T, mapImage) {
+      if (!mapImage) {
+        renderSchematicPositionPlan(doc, photos, T);
+        return;
+      }
+
+      const mapArea = { x: PDF.M, y: 40, w: PDF.W - 2 * PDF.M, h: 178 };
+      const imageRatio = mapImage.width / mapImage.height;
+      const drawW = Math.min(mapArea.w, mapArea.h * imageRatio);
+      const drawH = drawW / imageRatio;
+      const drawX = mapArea.x + (mapArea.w - drawW) / 2;
+      const drawY = mapArea.y + (mapArea.h - drawH) / 2;
+
+      doc.addPage();
+      sectionTitle(doc, String(T.positionPlan || 'Fotoplan'), 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...PDF.muted);
+      const located = photos.filter((photo) => photo.coords).length;
+      safeText(doc, String(T.planCount(located, photos.length - located)), PDF.M, 30);
+      doc.setDrawColor(...PDF.line);
+      doc.setLineWidth(0.25);
+      doc.rect(mapArea.x, mapArea.y, mapArea.w, mapArea.h, 'S');
+      doc.addImage(mapImage.url, 'JPEG', drawX, drawY, drawW, drawH, undefined, 'FAST');
+
+      const northX = drawX + drawW - 9;
+      const northY = drawY + 9;
+      doc.setFillColor(255, 255, 255);
+      doc.circle(northX, northY, 7, 'F');
+      doc.setDrawColor(...PDF.dark);
+      doc.setLineWidth(0.5);
+      doc.line(northX, northY + 3, northX, northY - 2);
+      doc.line(northX, northY - 2, northX - 1.5, northY + 0.5);
+      doc.line(northX, northY - 2, northX + 1.5, northY + 0.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(...PDF.dark);
+      safeText(doc, 'N', northX, northY - 3.5, { align: 'center' });
+
+      const metersPerMm = mapImage.metersPerPixel * mapImage.width / drawW;
+      const targetMeters = metersPerMm * 32;
+      const magnitude = 10 ** Math.floor(Math.log10(targetMeters));
+      const normalized = targetMeters / magnitude;
+      const scaleDistance = (normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1) * magnitude;
+      const scaleWidth = scaleDistance / metersPerMm;
+      const scaleX = mapArea.x + 7;
+      const scaleY = mapArea.y + mapArea.h - 8;
+      const halfWidth = scaleWidth / 2;
+      doc.setFillColor(...PDF.dark);
+      doc.rect(scaleX, scaleY, halfWidth, 2, 'F');
+      doc.setFillColor(255, 255, 255);
+      doc.rect(scaleX + halfWidth, scaleY, halfWidth, 2, 'FD');
+      doc.setDrawColor(...PDF.dark);
+      doc.line(scaleX, scaleY - 1, scaleX, scaleY + 3);
+      doc.line(scaleX + scaleWidth, scaleY - 1, scaleX + scaleWidth, scaleY + 3);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(...PDF.dark);
+      const distanceLabel = scaleDistance >= 1000
+        ? `${Number((scaleDistance / 1000).toPrecision(2))} km`
+        : `${Math.round(scaleDistance)} m`;
+      safeText(doc, distanceLabel, scaleX + scaleWidth + 3, scaleY + 2);
+
+      doc.setFontSize(8);
+      doc.setFillColor(...PDF.dark);
+      doc.circle(PDF.M + 3, 231, 2, 'F');
+      safeText(doc, String(T.planGps || 'GPS EXIF'), PDF.M + 8, 232.5);
+      doc.setFillColor(217, 119, 6);
+      doc.circle(PDF.M + 38, 231, 2, 'F');
+      safeText(doc, String(T.planManual || 'Manual'), PDF.M + 43, 232.5);
+      doc.setFontSize(7.5);
+      doc.setTextColor(...PDF.muted);
+      safeText(doc, String(T.positionPlanNote || ''), PDF.M, 245, { maxWidth: PDF.W - 2 * PDF.M });
+      if (mapImage.attribution) {
+        doc.setFontSize(6.5);
+        safeText(doc, mapImage.attribution, PDF.M, 255, { maxWidth: PDF.W - 2 * PDF.M });
+      }
+    }
+
+    function drawRunningHeader(doc, info, T) {
+      const pageW = Math.round((doc.internal?.pageSize?.getWidth && typeof doc.internal.pageSize.getWidth === 'function')
+        ? doc.internal.pageSize.getWidth()
+        : PDF.W);
+
+      if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+      try {
+        doc.setFillColor(...PDF.dark);
+        doc.rect(0, 0, pageW, 11, 'F');
+        doc.setTextColor(255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        safeText(doc, String(T.title || 'TECHNISCH VERSLAG'), PDF.M, 7);
+        doc.setFont('helvetica', 'normal');
+        const refText = info.ref ? `${String(T.ref || 'Ref')}: ${info.ref}` : '';
+        const rightMeta = [refText, String(info.project || '')].filter(Boolean).join(' | ');
+        if (rightMeta) safeText(doc, rightMeta, pageW - PDF.M, 7, { align: 'right' });
+      } finally {
+        if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+      }
+    }
+
+    function drawFooter(doc, i, n, info, T, now) {
+      const pageW = Math.round((doc.internal?.pageSize?.getWidth && typeof doc.internal.pageSize.getWidth === 'function')
+        ? doc.internal.pageSize.getWidth()
+        : PDF.W);
+      const pageH = Math.round((doc.internal?.pageSize?.getHeight && typeof doc.internal.pageSize.getHeight === 'function')
+        ? doc.internal.pageSize.getHeight()
+        : PDF.H);
+      const y = pageH - 10;
+
+      if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+      try {
+        doc.setDrawColor(...PDF.line);
+        doc.setLineWidth(0.2);
+        doc.line(PDF.M, y - 4, pageW - PDF.M, y - 4);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(...PDF.muted);
+
+        const genStr = `Smart Field-Photo Inspector · ${String(T.generated || 'Datum')}: ${fmtDate(now)}`;
+        safeText(doc, genStr, PDF.M, y);
+
+        const pageStr = (typeof T.pageOf === 'function')
+          ? T.pageOf(Number(i) || 1, Number(n) || 1)
+          : `Pagina ${i} van ${n}`;
+        safeText(doc, pageStr, pageW - PDF.M, y, { align: 'right' });
+      } finally {
+        if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+      }
+    }
+
+    function sectionTitle(doc, text, y) {
+      const safeY = Math.round(Number.isFinite(Number(y)) ? Number(y) : 24);
+      if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+      try {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(...PDF.dark);
+        safeText(doc, String(text || ''), PDF.M, safeY);
+        doc.setDrawColor(...PDF.accent);
+        doc.setLineWidth(0.6);
+        doc.line(PDF.M, safeY + 1.8, PDF.M + 22, safeY + 1.8);
+      } finally {
+        if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+      }
+    }
+
+    /** Dibuja el bloque formal de firmas al final de la última página */
+    function renderSignatures(doc, startY, info, T, now) {
+      let y = Math.round(Number.isFinite(Number(startY)) ? Number(startY) : 180);
+      if (y + 54 > PDF.H - 20) {
+        doc.addPage();
+        y = 22;
+      } else {
+        y += 6;
+      }
+
+      sectionTitle(doc, T.sec2, y);
+      y += 8;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...PDF.text);
+      const intro = (typeof T.signIntro === 'function')
+        ? T.signIntro(fmtDate(now), info.expert)
+        : `Opgemaakt te ${fmtDate(now)}.`;
+      safeText(doc, intro, PDF.M, y);
+      y += 18;
+
+      const colW = Math.round((PDF.W - 2 * PDF.M - 14) / 2);
+      const boxH = 26;
+
+      if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+      try {
+        // Caja 1: Deskundige / Perito
+        doc.setDrawColor(...PDF.line);
+        doc.setLineWidth(0.25);
+        doc.setFillColor(...PDF.soft);
+        doc.roundedRect(PDF.M, y, colW, boxH, 2, 2, 'FD');
+
+        doc.setDrawColor(...PDF.muted);
+        doc.line(PDF.M + 6, y + boxH - 7, PDF.M + colW - 6, y + boxH - 7);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(...PDF.dark);
+        safeText(doc, String(T.signExpert || 'Handtekening Deskundige'), PDF.M + 6, y + 6);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(...PDF.muted);
+        if (info.expert) safeText(doc, String(info.expert), PDF.M + 6, y + 10.5);
+        safeText(doc, 'Datum / Fecha: ' + fmtDate(now), PDF.M + 6, y + boxH - 2.5);
+
+        // Caja 2: Bouwheer / Partes
+        const x2 = PDF.M + colW + 14;
+        doc.setDrawColor(...PDF.line);
+        doc.roundedRect(x2, y, colW, boxH, 2, 2, 'FD');
+        doc.setDrawColor(...PDF.muted);
+        doc.line(x2 + 6, y + boxH - 7, x2 + colW - 6, y + boxH - 7);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(...PDF.dark);
+        safeText(doc, String(T.signBouwheer || 'Handtekening Bouwheer'), x2 + 6, y + 6);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(...PDF.muted);
+        safeText(doc, 'Voor akkoord / Conforme', x2 + 6, y + 10.5);
+        safeText(doc, 'Datum / Fecha: _______________', x2 + 6, y + boxH - 2.5);
+      } finally {
+        if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+      }
+
+      return y + boxH;
+    }
+
+    async function exportPdf() {
+      if (!state.photos.length) { toast('No hay fotos para exportar.', 'warning'); return; }
+      if (!window.jspdf?.jsPDF) { toast('jsPDF no está disponible. Revisa la conexión y recarga.', 'error'); return; }
+
+      const unlocated = state.photos.filter((p) => !p.coords).length;
+      if (unlocated && !confirm(`${unlocated} foto(s) no tienen ubicación. ¿Generar el informe igualmente?`)) return;
+
+      const info = projectInfo();
+      const T = I18N[info.lang];
+      const now = new Date();
+      const original = dom.btnExport.innerHTML;
+      state.busy = true;
+      updateStats();
+      dom.btnExport.innerHTML = '⏳ Generando…';
+
+      try {
+        dom.btnExport.innerHTML = '⏳ Capturando fotoplano…';
+        const mapImage = await captureMapForPdf();
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+        if (typeof doc.autoTable !== 'function') throw new Error('el plugin jsPDF-AutoTable no se ha cargado');
+
+        doc.setProperties({
+          title: `${String(T.title || 'Verslag')} - ${info.project || T.unnamed}`,
+          subject: String(T.subtitle || ''),
+          author: info.expert || 'Smart Field-Photo Inspector',
+          creator: 'Smart Field-Photo Inspector'
+        });
+
+        /* ---- Portada / cabecera formal ---- */
+        const pageW = Math.round((doc.internal?.pageSize?.getWidth && typeof doc.internal.pageSize.getWidth === 'function')
+          ? doc.internal.pageSize.getWidth()
+          : PDF.W);
+
+        if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+        try {
+          doc.setFillColor(...PDF.dark);
+          doc.rect(0, 0, pageW, 34, 'F');
+          doc.setFillColor(...PDF.accent);
+          doc.rect(0, 34, pageW, 1.2, 'F');
+          doc.setTextColor(255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(14);
+          safeText(doc, String(T.title || ''), PDF.M, 14.5);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9.5);
+          safeText(doc, String(T.subtitle || ''), PDF.M, 23);
+          doc.setFontSize(8);
+          safeText(doc, `${String(T.generated || 'Datum')}: ${fmtDate(now)}`, pageW - PDF.M, 14.5, { align: 'right' });
+          if (info.ref) safeText(doc, `${String(T.ref || 'Ref')}: ${info.ref}`, pageW - PDF.M, 23, { align: 'right' });
+        } finally {
+          if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+        }
+
+        doc.setTextColor(...PDF.dark);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        const projectTitle = String(info.project || T.unnamed || 'Project');
+        const titleLines = doc.splitTextToSize(projectTitle, PDF.W - 2 * PDF.M);
+        safeText(doc, titleLines, PDF.M, 46);
+        let y = 46 + (Array.isArray(titleLines) ? titleLines.length : 1) * 6;
+
+        /* ---- Bloque de metadatos del expediente ---- */
+        const gps = state.photos.filter((p) => p.source === 'gps').length;
+        const manual = state.photos.filter((p) => p.source === 'manual').length;
+        doc.autoTable({
+          startY: y,
+          theme: 'grid',
+          margin: { left: PDF.M, right: PDF.M },
+          styles: { fontSize: 8.5, cellPadding: 2.2, textColor: PDF.text, lineColor: PDF.line, lineWidth: 0.2 },
+          columnStyles: { 0: { fontStyle: 'bold', cellWidth: 46, fillColor: PDF.soft } },
+          body: [
+            [String(T.project || 'Project'), String(info.project || T.na)],
+            [String(T.location || 'Locatie'), String(info.address || T.na)],
+            [String(T.expert || 'Deskundige'), String(info.expert || T.na)],
+            [String(T.ref || 'Ref'), String(info.ref || T.na)],
+            [String(T.genDate || 'Datum'), fmtDate(now)],
+            [String(T.numPhotos || "Foto's"), String(T.photosDetail(state.photos.length, gps, manual, state.photos.length - gps - manual))],
+            [String(T.crs || 'CRS'), String(T.crsValue || 'WGS84')]
+          ]
+        });
+
+        // Cálculo seguro de y tras la primera tabla
+        let metaFinalY = y + 45;
+        if (doc.lastAutoTable && Number.isFinite(doc.lastAutoTable.finalY)) {
+          metaFinalY = doc.lastAutoTable.finalY;
+        }
+        y = metaFinalY + 10;
+
+        /* ---- Tabla estructurada de evidencias ---- */
+        sectionTitle(doc, T.sec1, y);
+        y += 5;
+
+        const body = state.photos.map((p, i) => {
+          const l72 = p.coords ? toLambert72(p.coords.lat, p.coords.lng) : null;
+          const dateLines = [fmtDateTime(p.date)];
+          if (p.dateSource === 'file') dateLines.push(`* (${String(T.fileDateLabel || 'Bestandsdatum')})`);
+          if (p.camera) dateLines.push(String(p.camera));
+
+          let coordText = String(T.noLocation || 'Geen locatie');
+          if (p.coords) {
+            const lines = [
+              `WGS84: ${fmtCoord(p.coords.lat)}, ${fmtCoord(p.coords.lng)}`,
+              `Methode: ${p.source === 'manual' ? T.srcManual : T.srcGps}`
+            ];
+            if (l72) lines.push(`L72: X ${l72.x.toFixed(1)} / Y ${l72.y.toFixed(1)}`);
+            if (p.alt != null) lines.push(`${T.alt}: ${p.alt.toFixed(1)} m`);
+            coordText = lines.join('\n');
+          }
+
+          const rawNote = p.note ? p.note.trim() : '';
+          const noteText = rawNote || String(T.defaultDamage || 'Geen zichtbare schade vastgesteld');
+
+          // Columna 1: Nombre de archivo y referencia al anexo sin bitmaps en celda
+          const fileName = String(p.name || `${T.photo || 'Foto'} ${i + 1}`);
+          const photoCellLines = [fileName];
+          if (info.annex) {
+            const tag = (typeof T.seeAnnex === 'function')
+                ? T.seeAnnex(i + 1)
+                : (info.lang === 'es' ? `[Foto ${i + 1} en el anexo]` : `[Foto ${i + 1} in bijlage]`);
+            photoCellLines.push(tag);
+          }
+
+          return [
+            String(i + 1),
+            photoCellLines.join('\n'),
+            dateLines.join('\n'),
+            coordText,
+            noteText
+          ];
+        });
+
+        doc.autoTable({
+          startY: y,
+          head: [[
+            String(T.colNr || '#'),
+            String(T.colPhoto || 'Foto / Bestand'),
+            String(T.colDate || 'Datum'),
+            String(T.colCoords || 'Coördinaten'),
+            String(T.colNote || 'Vaststelling')
+          ]],
+          body,
+          theme: 'grid',
+          margin: { left: PDF.M, right: PDF.M, top: 18, bottom: 18 },
+          rowPageBreak: 'avoid',
+          headStyles: {
+            fillColor: PDF.dark,
+            textColor: 255,
+            fontStyle: 'bold',
+            fontSize: 8.5,
+            valign: 'middle',
+            minCellHeight: 8
+          },
+          styles: {
+            fontSize: 7.8,
+            cellPadding: 2.2,
+            valign: 'middle',
+            textColor: PDF.text,
+            lineColor: PDF.line,
+            lineWidth: 0.2,
+            overflow: 'linebreak',
+            minCellHeight: 7
+          },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          columnStyles: {
+            0: { cellWidth: 10, halign: 'center', fontStyle: 'bold', fontSize: 8.5 },
+            1: { cellWidth: 40, fontSize: 7.6, fontStyle: 'bold' },
+            2: { cellWidth: 34, fontSize: 7.4 },
+            3: { cellWidth: 44, fontSize: 7.2 },
+            4: { cellWidth: 'auto', fontSize: 8 }
+          },
+          didParseCell: (data) => {
+            if (data.section === 'body' && data.column.index === 4) {
+              const p = state.photos[data.row.index];
+              if (!p || !p.note || !p.note.trim()) {
+                data.cell.styles.textColor = PDF.muted;
+                data.cell.styles.fontStyle = 'italic';
+              }
+            }
+          }
+        });
+
+        // Cálculo seguro de y tras la tabla de evidencias
+        let evFinalY = y + 60;
+        if (doc.lastAutoTable && Number.isFinite(doc.lastAutoTable.finalY)) {
+          evFinalY = doc.lastAutoTable.finalY;
+        }
+        y = evFinalY + 6;
+
+        /* ---- Notas explicativas ---- */
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(7.5);
+        doc.setTextColor(...PDF.muted);
+        const notes = [];
+        if (state.photos.some((p) => p.dateSource === 'file')) notes.push(String(T.fileDateNote || ''));
+        if (manual) notes.push(String(T.manualNote || ''));
+        notes.forEach((n) => {
+          if (!n) return;
+          const lines = doc.splitTextToSize(n, PDF.W - 2 * PDF.M);
+          const lineCount = Array.isArray(lines) ? lines.length : 1;
+          if (y + lineCount * 3.5 > PDF.H - 22) { doc.addPage(); y = 22; }
+          safeText(doc, lines, PDF.M, y);
+          y += lineCount * 3.5 + 1.5;
+        });
+
+        /* ---- Plano con las posiciones numeradas de las fotografías ---- */
+        renderPositionPlan(doc, state.photos, T, mapImage);
+
+        /* ---- Anexo fotográfico (opcional, 2 fotos por página) ---- */
+        if (info.annex) {
+          const slotH = Math.round((PDF.H - 20 - 18) / 2); // ≈ 129.5 mm -> 130 mm
+          const imgH = slotH - 30;
+          const imgW = Math.round(PDF.W - 2 * PDF.M);
+          for (let i = 0; i < state.photos.length; i++) {
+            const p = state.photos[i];
+            dom.btnExport.innerHTML = `⏳ Anexo ${i + 1}/${state.photos.length}`;
+            await nextFrame();
+
+            const slot = i % 2;
+            if (slot === 0) {
+              doc.addPage();
+              if (i === 0) sectionTitle(doc, T.annex, 22);
+            }
+            const y0 = Math.round(20 + slot * slotH + (i === 0 ? 6 : 0));
+
+            // Imagen en alta resolución
+            const img = p.report || p.preview;
+            const boxH = Math.round(Math.max(20, imgH - (i === 0 ? 6 : 0)));
+
+            if (typeof doc.saveGraphicsState === 'function') doc.saveGraphicsState();
+            try {
+              doc.setFillColor(...PDF.soft);
+              doc.rect(PDF.M, y0, imgW, boxH, 'F');
+            } finally {
+              if (typeof doc.restoreGraphicsState === 'function') doc.restoreGraphicsState();
+            }
+
+            try {
+              drawFitted(doc, img, PDF.M, y0, imgW, boxH);
+            } catch (err) {
+              console.warn('No se pudo añadir imagen en anexo:', err);
+            }
+
+            // Leyenda de la foto
+            let cy = y0 + boxH + 5;
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(9.5);
+            doc.setTextColor(...PDF.dark);
+            safeText(doc, `${String(T.photo || 'Foto')} ${i + 1} - ${String(p.name || '')}`, PDF.M, cy);
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            doc.setTextColor(...PDF.muted);
+            const coordTxt = coordLines(p, T).split('\n').slice(0, 2).join('  |  ');
+            const dateAndCoords = `${fmtDateTime(p.date)}${p.dateSource === 'file' ? ' *' : ''}  |  ${coordTxt}`;
+            safeText(doc, dateAndCoords, PDF.M, cy + 4.5, { maxWidth: imgW });
+
+            const note = (p.note && p.note.trim()) ? p.note.trim() : String(T.defaultDamage || '');
+            doc.setFontSize(8.8);
+            doc.setTextColor(...((p.note && p.note.trim()) ? PDF.text : PDF.muted));
+            doc.setFont('helvetica', (p.note && p.note.trim()) ? 'normal' : 'italic');
+            let noteLines = doc.splitTextToSize(String(note), imgW);
+            if (Array.isArray(noteLines) && noteLines.length > 3) {
+              noteLines = [...noteLines.slice(0, 2), noteLines[2].replace(/.{0,3}$/, '...')];
+            }
+            safeText(doc, noteLines, PDF.M, cy + 10);
+          }
+
+          // Posición Y tras el anexo en la última página
+          const lastSlot = (state.photos.length - 1) % 2;
+          if (lastSlot === 0) {
+            y = 20 + slotH + 8;
+          } else {
+            doc.addPage();
+            y = 22;
+          }
+        }
+
+        /* ---- Firmas al final de la última página ---- */
+        renderSignatures(doc, y, info, T, now);
+
+        /* ---- Paginación y cabeceras dinámicas ---- */
+        const n = (typeof doc.getNumberOfPages === 'function')
+          ? doc.getNumberOfPages()
+          : ((doc.internal && doc.internal.pages) ? doc.internal.pages.length - 1 : 1);
+
+        for (let i = 1; i <= n; i++) {
+          doc.setPage(i);
+          if (i > 1) drawRunningHeader(doc, info, T);
+          drawFooter(doc, i, n, info, T, now);
+        }
+
+        /* ---- Descarga con formato Plaatsbeschrijving_[Referencia]_[Fecha].pdf ---- */
+        const ymd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        const refClean = slugify(info.ref);
+        const fname = refClean
+          ? `Plaatsbeschrijving_${refClean}_${ymd}.pdf`
+          : `Plaatsbeschrijving_${ymd}.pdf`;
+
+        doc.save(fname);
+        toast(`Informe generado: ${fname}`, 'success');
+      } catch (err) {
+        console.error(err);
+        toast(`Error al generar el PDF: ${err.message || err}`, 'error');
+      } finally {
+        state.busy = false;
+        dom.btnExport.innerHTML = original;
+        updateStats();
+      }
+    }
+
+    dom.btnExport.addEventListener('click', exportPdf);
+
+    /* ==========================================================
+       11. INIT
+       ========================================================== */
+    loadProject();
+    renderAll();
+    // Recalcula el tamaño del mapa en cambios de layout (responsive)
+    window.addEventListener('resize', () => map.invalidateSize());
+  })();
+  </script>
+</body>
+</html>
