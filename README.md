@@ -45,5 +45,4 @@ Typically, field surveyors take dozens or hundreds of high-resolution site photo
 
 1. Clone this repository:
    ```bash
-   git clone [https://github.com/PatoPitaya/Proyect-Surveyor.git](https://github.com/PatoPitaya/Proyect-Surveyor.git)
-   cd Proyect-Surveyor
+   git clone https://github.com/PatoPitaya/Proyect-Surveyor.git
